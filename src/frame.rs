@@ -15,8 +15,6 @@ pub struct Frame<T> {
     pub id: u64,
     /// Arbitrary-sized array
     pub array: ArrayD<T>,
-    /// Flag indicating if the entire frame has been filled
-    is_full: bool,
     /// Track how many slices of the array exist
     received: Vec<bool>,
     /// Track how many samples have already been written
@@ -32,7 +30,6 @@ where
     pub fn new(id: impl Into<u64>, shape: &[usize], axis: usize) -> Frame<T> {
         Self {
             id: id.into(),
-            is_full: false,
             array: ArrayD::<T>::zeros(IxDyn(shape)),
             received: vec![false; shape.to_vec()[axis]],
             received_count: 0,
@@ -41,10 +38,11 @@ where
     }
 
     // NB: explicitly assume that the order of `indices` and `chunk` are the same
-    pub fn insert(&mut self, indices: &Vec<usize>, chunk: &ArrayViewD<T>) -> Result<(), String> {
-        if self.is_full {
+    pub fn insert(&mut self, indices: &[usize], chunk: &ArrayViewD<T>) -> Result<(), String> {
+        if self.is_full() {
             return Err("tried to write to a frame that's already full!".into());
         }
+
         if indices.len() != chunk.shape()[self.axis] {
             return Err(format!(
                 "number of indices does not match chunk shape: {} != {}",
@@ -55,7 +53,7 @@ where
         // Don't assume that indices are contiguous
         let split_ax = Axis(self.axis);
 
-        for idx in indices.iter() {
+        for idx in indices {
             if self.received[*idx] {
                 return Err("tried to insert an index which has already been written".into());
             }
@@ -67,21 +65,16 @@ where
             self.received_count += 1;
         }
 
-        // Update the internal state if the frame is now full
-        self.check_complete();
-
         Ok(())
     }
 
-    /// Public getter for `is_full`
-    pub fn is_full(&self) -> &bool {
-        &self.is_full
+    /// `true` if this frame has received all expected samples
+    pub fn is_full(&self) -> bool {
+        self.received_count == self.array.shape()[self.axis] as u64
     }
 
-    /// Check if the frame is full and update internal state if needed.
-    fn check_complete(&mut self) {
-        if self.received_count == self.array.shape()[self.axis] as u64 {
-            self.is_full = true;
-        }
+    /// Getter for the sample count
+    pub fn sample_count(&self) -> u64 {
+        self.received_count
     }
 }

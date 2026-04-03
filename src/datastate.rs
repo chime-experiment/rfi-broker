@@ -3,10 +3,10 @@
 //! Each buffer is independently typed and locked, so reads on one dataset
 //! never block reads or writes on another.
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::packet::{Body, Header, Packet};
-use crate::ringbuffer::SharedRingBuffer;
+use crate::ringbuffer::RingBuffer;
 
 /// Hold an arbitrary number of `[TypedBuffer]`s.
 #[derive(Default, Debug)]
@@ -16,63 +16,51 @@ pub struct DataState {
     initialized: OnceLock<bool>,
     /// Fixed instance of the packet header, whose values should
     /// be set by the first valid packet
-    pub metadata: Mutex<Header>,
+    pub metadata: RwLock<Header>,
     /// Ringbuffers holding associated datasets from the
     /// packet body
-    pub frac_flagged: SharedRingBuffer<f32>,
-    pub sktilde_avg: SharedRingBuffer<f32>,
-    pub bad_feed_counts: SharedRingBuffer<u8>,
+    pub frac_flagged: RingBuffer<f32>,
+    pub sktilde_avg: RingBuffer<f32>,
+    pub bad_feed_counts: RingBuffer<u8>,
 }
 
 pub type SharedDataState = Arc<DataState>;
 
 impl DataState {
+    fn is_initialized(&self) -> bool {
+        self.initialized.get().is_some()
+    }
+
     /// Initialize a default state from a packet
-    fn init(&self, packet: &Packet) {
-        if self.initialized.get().is_some() {
-            return;
+    fn init(&self, packet: &Packet) -> Result<&Self, String> {
+        if self.is_initialized() {
+            return Err("State has already been initialized!".into());
         }
         let header: &Header = &packet.header;
         // Set the metadata, which is behind a mutex
-        *self.metadata.lock().unwrap() = packet.header;
+        *self.metadata.write().unwrap() = packet.header;
         // Reset the buffers, which handle their own internal mutex's
         self.frac_flagged
-            .reset(vec![header.num_local_freq as usize]);
-        self.sktilde_avg.reset(vec![header.num_local_freq as usize]);
-        self.bad_feed_counts.reset(vec![
+            .init(vec![header.num_local_freq as usize])?;
+        self.sktilde_avg
+            .init(vec![header.num_local_freq as usize])?;
+        self.bad_feed_counts.init(vec![
             header.num_local_freq as usize,
             header.num_elements as usize,
-        ]);
+        ])?;
 
         self.initialized.set(true).ok();
-    }
 
-    /// Create a new datastate from a parsed packet.
-    #[allow(dead_code)]
-    fn new(packet: &Packet) -> Self {
-        let state = Self::default();
-        state.init(packet);
-
-        state
-    }
-
-    /// New shared datastate
-    #[allow(dead_code)]
-    fn new_shared(packet: &Packet) -> SharedDataState {
-        Arc::new(Self::new(packet))
-    }
-
-    /// Default shared
-    pub fn default_shared() -> SharedDataState {
-        Arc::new(Self::default())
+        Ok(self)
     }
 
     /// Push a packet to an existing state
-    pub fn push(&self, packet: &Packet) -> Result<(), Box<dyn std::error::Error>> {
-        self.init(packet); // No behaviour if state is initialized
-                           // Check that the metadata is as-expected
+    pub fn push(&self, packet: &Packet) -> Result<(), String> {
+        // Don't actually care about the result of `init` here
+        let _ = self.init(packet);
+        // Check that the metadata is as-expected
         self.metadata
-            .lock()
+            .read()
             .unwrap()
             .check_expected_equal(&packet.header)?;
 
@@ -110,7 +98,7 @@ impl DataState {
         )?;
 
         // Update the metadata since we got here
-        let mut guard = self.metadata.lock().unwrap();
+        let mut guard = self.metadata.write().unwrap();
         *guard = *header;
 
         Ok(())

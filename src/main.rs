@@ -9,8 +9,9 @@ use std::net::SocketAddr;
 use clap::Parser;
 
 mod datastate;
+mod endpoints;
 mod frame;
-mod handlers;
+mod metrics;
 mod packet;
 mod ringbuffer;
 mod server;
@@ -45,13 +46,11 @@ fn main() {
     // Extract command-line options
     let cli = Cli::parse();
     println!("Using {} worker threads", cli.threads);
-    // Create the data state
-    let state = datastate::DataState::default_shared();
 
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(cli.threads)
         .enable_all()
         .build()
         .unwrap()
-        .block_on(server::serve(cli.addr, cli.udp_addr, state));
+        .block_on(server::serve(cli.addr, cli.udp_addr));
 }

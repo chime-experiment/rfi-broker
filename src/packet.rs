@@ -2,6 +2,7 @@
 
 // This header must match the one defined in `kotekan`:
 // https://github.com/kotekan/kotekan/blob/chord/lib/utils/rfi_functions.h#L14
+use std::io::Cursor;
 
 use binrw::BinRead;
 use serde::Serialize;
@@ -99,4 +100,13 @@ pub struct Packet {
     /// packet body
     #[br(args { hdr: &header })]
     pub body: Body,
+}
+
+impl Packet {
+    /// Parse from bytes
+    pub fn parse(buf: &[u8]) -> Result<Self, String> {
+        let mut cursor = Cursor::new(&buf);
+
+        Self::read_le(&mut cursor).map_err(|e| format!("Error parsing packet: {e}"))
+    }
 }

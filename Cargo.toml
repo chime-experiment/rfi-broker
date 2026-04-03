@@ -7,8 +7,9 @@ edition = "2021"
 axum = "0.7"
 binrw = "0.14"
 clap = { version = "4.6", features = ["derive"] }
-ndarray = { version = "0.15", features = ["serde"] }
+ndarray = { version = "0.17.2", features = ["serde"] }
 num-traits = "0.2.19"
+prometheus = "0.14.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

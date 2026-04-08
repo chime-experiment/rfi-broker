@@ -1,4 +1,4 @@
-//! Server, router, and UDP listener.
+//! Server, router, and UDP receiver.
 //!
 //! # Endpoints
 //! - ``metadata``: Most recent packet header metadata
@@ -6,6 +6,7 @@
 //! - ``bad_input_likelihood``: per-input likelihood of a feed being corrupted
 
 use std::future::IntoFuture;
+use std::io::ErrorKind::WouldBlock;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -16,12 +17,12 @@ use tokio::sync::mpsc;
 
 use crate::datastate::{DataState, SharedDataState};
 use crate::endpoints;
-use crate::metrics::{update_basic_metrics, Metrics, SharedMetrics};
+use crate::metrics::{update_metrics, Metrics, SharedMetrics};
 use crate::packet::Packet;
 
 /// Builds a [`Router`] containing all the endpoints we'd like to enable.
 ///
-/// `store` is injected as Axum [`State`] so handlers can read the UDP buffers.
+/// `store` is injected as Axum [`State`] so handlers can read the buffers.
 fn router(state: SharedDataState, metrics: SharedMetrics) -> Router {
     let mut router = Router::new();
     router = router.route("/data", get(endpoints::data));
@@ -42,29 +43,20 @@ fn router(state: SharedDataState, metrics: SharedMetrics) -> Router {
     router.merge(metrics_router)
 }
 
-/// Signal sent whenever a packet is received.
-enum PacketEvent {
-    Received,
-    Dropped,
-}
+/// Type for packet event message channel
+type PacketEvent = Result<Vec<u8>, Box<dyn std::error::Error + Send>>;
 
-/// Binds a UDP socket on `addr` and pushes decoded packets into `state`.
+/// Binds a UDP socket on `addr` and sends [`PacketEvent`] over `event_tx`.
 ///
-/// Also emits a [`PacketEvent`] whenever a new packet is received.
+/// Designed to handle short bursts of many packets. Individual packets are
+/// pushed to the `event_tx` channel to be handled elsewhere.
 ///
 /// Runs indefinitely; intended to be spawned with [`tokio::spawn`].
-/// Datagrams that fail to parse are silently discarded.
 ///
 /// # Panics
 /// Panics if the socket cannot be bound.
-async fn udp_listener(
-    addr: SocketAddr,
-    state: SharedDataState,
-    event_tx: mpsc::Sender<PacketEvent>,
-) {
-    let socket = UdpSocket::bind(addr)
-        .await
-        .unwrap_or_else(|e| panic!("Failed to bind UDP socket on {addr}: {e}"));
+async fn packet_recv(addr: SocketAddr, event_tx: mpsc::Sender<PacketEvent>) -> std::io::Result<()> {
+    let socket = UdpSocket::bind(addr).await?;
 
     println!("UDP listener bound to {addr}");
 
@@ -73,25 +65,23 @@ async fn udp_listener(
     // Need to set some metadata on first iteration, then check on
     // each subsequent iteration
     loop {
-        let len = match socket.recv(&mut buf).await {
-            Err(e) => {
-                eprintln!("UDP recv error on {addr}: {e}");
-                let _ = event_tx.try_send(PacketEvent::Dropped);
-                continue;
+        // Wait until the socket is readable
+        socket.readable().await?;
+        // Pass through the entire OS buffer
+        loop {
+            match socket.try_recv_from(&mut buf) {
+                Ok((len, _)) => {
+                    let _ = event_tx.try_send(Ok(buf[..len].to_vec()));
+                }
+                Err(ref e) if e.kind() == WouldBlock => {
+                    // No packet available, so assume that we've pulled
+                    // everything from the OS buffer
+                    break;
+                }
+                Err(e) => {
+                    let _ = event_tx.try_send(Err(Box::new(e)));
+                }
             }
-            Ok(len) => {
-                let _ = event_tx.try_send(PacketEvent::Received);
-                len
-            }
-        };
-
-        // NB: this could be a bottleneck if packets are recieved faster than the
-        // push can update
-        match Packet::parse(&buf[..len]) {
-            Ok(packet) => state
-                .push(&packet)
-                .unwrap_or_else(|e| eprintln!("Error pushing packet to app state: {e}")),
-            Err(e) => eprintln!("Error parsing packet: {e}"),
         }
     }
 }
@@ -105,25 +95,43 @@ async fn udp_listener(
 /// this triggers on every new packet. If we wanted to include more
 /// complicated metrics, best approach is likely to switch to a fixed
 /// cadence instead of packet event.
-async fn packet_event_handler(
+async fn packet_handler(
     mut rx: mpsc::Receiver<PacketEvent>,
     metrics: SharedMetrics,
     state: SharedDataState,
 ) {
-    let mut last_update_id: i64 = 0;
+    let mut last_update_id: u64 = 0;
+
+    // NB: it's possible that this could become a bottleneck, in which
+    // case we could make it multi-threaded
     while let Some(event) = rx.recv().await {
+        // TODO: can we clean up this nested match?
         match event {
-            PacketEvent::Received => {
+            Ok(bytes) => {
+                let packet_id = match Packet::parse(&bytes) {
+                    Ok(packet) => match state.push(&packet) {
+                        Ok(id) => id,
+                        Err(e) => {
+                            eprintln!("Error pushing packet to state: {e}");
+                            continue;
+                        }
+                    },
+                    Err(e) => {
+                        eprintln!("Error parsing packet: {e}");
+                        continue;
+                    }
+                };
                 // Only update metrics if the packet has a different
                 // ID from the last one seen.
-                let id = state.metadata.read().unwrap().id();
-                if id != last_update_id {
-                    last_update_id = id;
+                if packet_id != last_update_id {
+                    last_update_id = packet_id;
                     // Only update computationally cheap metrics
-                    update_basic_metrics(&metrics, &state);
+                    update_metrics(&metrics, &state);
                 }
             }
-            PacketEvent::Dropped => {} // no-op
+            Err(err) => {
+                eprintln!("{err}");
+            } // TODO: increment a metric
         }
     }
 }
@@ -138,17 +146,17 @@ pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr) {
     let metrics: SharedMetrics = Arc::new(Metrics::default());
     // Creates the mpsc channel used to send [`PacketEvent`]s from the UDP
     // listener to the metrics updater. Returns `(sender, receiver)`.
-    // The channel is bounded to 256 events; if the updater falls behind, senders
+    // The channel is bounded to 2048 events; if the updater falls behind, senders
     // use [`try_send`](mpsc::Sender::try_send) and drop events rather than
     // blocking the UDP loop.
-    let (metrics_tx, metrics_rx) = mpsc::channel(256);
+    let (packet_tx, packet_rx) = mpsc::channel::<PacketEvent>(2048);
 
-    let packet_event = tokio::spawn(packet_event_handler(
-        metrics_rx,
+    let packet_handler = tokio::spawn(packet_handler(
+        packet_rx,
         Arc::clone(&metrics),
         Arc::clone(&state),
     ));
-    let udp = tokio::spawn(udp_listener(udp_addr, Arc::clone(&state), metrics_tx));
+    let packet_recv = tokio::spawn(packet_recv(udp_addr, packet_tx));
 
     let listener = TcpListener::bind(http_addr)
         .await
@@ -158,8 +166,8 @@ pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr) {
     println!("HTTP listening on {http_addr}");
 
     tokio::select! {
-        _ = packet_event => eprintln!("Packet received handler exited unexpectedly"),
-        _ = udp  => eprintln!("UDP listener exited unexpectedly"),
+        _ = packet_handler => eprintln!("Packet handler exited unexpectedly"),
+        _ = packet_recv => eprintln!("UDP receiver exited unexpectedly"),
         _ = http => eprintln!("HTTP server exited unexpectedly"),
     }
 }

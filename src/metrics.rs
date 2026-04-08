@@ -75,7 +75,7 @@ impl Default for Metrics {
 ///
 /// This is independent of the trigger mechanism - it should be
 /// called from an async function run using ``tokio::spawn``.
-pub fn update_basic_metrics(metrics: &SharedMetrics, state: &SharedDataState) {
+pub fn update_metrics(metrics: &SharedMetrics, state: &SharedDataState) {
     // Use just the most recent frame
     if let Some(frac_flagged) = state.frac_flagged.last() {
         // Iterate frequencies and update for each
@@ -109,5 +109,5 @@ pub fn update_extra_metrics(metrics: &SharedMetrics, state: &SharedDataState) {
     // complicated (as-needed).
     // NB: for example, if we wanted to expose the bad_input_likelihood as a metric,
     // we would probably want it to be computed at a lower cadence.
-    update_basic_metrics(metrics, state);
+    update_metrics(metrics, state);
 }

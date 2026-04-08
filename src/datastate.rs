@@ -55,7 +55,7 @@ impl DataState {
     }
 
     /// Push a packet to an existing state
-    pub fn push(&self, packet: &Packet) -> Result<(), String> {
+    pub fn push(&self, packet: &Packet) -> Result<u64, String> {
         // Don't actually care about the result of `init` here
         let _ = self.init(packet);
         // Check that the metadata is as-expected
@@ -101,6 +101,6 @@ impl DataState {
         let mut guard = self.metadata.write().unwrap();
         *guard = *header;
 
-        Ok(())
+        Ok(id)
     }
 }

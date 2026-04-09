@@ -7,8 +7,8 @@
 //! The shape and dimension names are fixed at construction time; frames with
 //! a mismatched shape are dropped on push.
 
+use parking_lot::Mutex;
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::{OnceLock, RwLock};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -32,51 +32,29 @@ const PARTIAL_FRAME_CAPACITY: usize = 8;
 #[derive(Default, Debug)]
 pub struct RingBuffer<T> {
     /// Expected shape of each frame
-    frame_shape: OnceLock<Vec<usize>>,
+    frame_shape: Vec<usize>,
     /// Store a handful of partial frames
-    partial_frames: RwLock<BTreeMap<u64, Frame<T>>>,
+    partial_frames: Mutex<BTreeMap<u64, Frame<T>>>,
     /// Ring buffer of the most recently received array frames
-    frames: RwLock<VecDeque<Frame<T>>>,
+    frames: Mutex<VecDeque<Frame<T>>>,
 }
 
 impl<T> RingBuffer<T>
 where
-    T: Num + Clone + Default + Serialize,
+    T: Num + Clone,
 {
-    /// Creates a new, empty [`RingBuffer`] with the given dimensions and shape.
-    ///
-    /// # Panics
-    /// Panics if `dims` and `shape` have different lengths.
-    #[allow(dead_code)]
+    /// Create a new ringbuffer
     pub fn new(frame_shape: Vec<usize>) -> Self {
-        // NB: this is technically a worse way to create this, since it
-        // ends up initializing an empty BTreeMap and VecDeque twice
-        let new = Self::default();
-        new.init(frame_shape).unwrap();
-        new
-    }
-
-    /// Reset and re-initialize the buffer without destroying it
-    pub fn init(&self, frame_shape: Vec<usize>) -> Result<(), String> {
-        if self.frame_shape.get().is_some() {
-            return Err("Buffer has already been initialized!".into());
+        Self {
+            frame_shape,
+            partial_frames: Mutex::new(BTreeMap::<u64, Frame<T>>::new()),
+            frames: Mutex::new(VecDeque::<Frame<T>>::with_capacity(RING_CAPACITY)),
         }
-        self.frame_shape.set(frame_shape).ok();
-        *self.partial_frames.write().unwrap() = BTreeMap::<u64, Frame<T>>::new();
-        *self.frames.write().unwrap() = VecDeque::<Frame<T>>::with_capacity(RING_CAPACITY);
-
-        Ok(())
-    }
-
-    /// Getter for frame shape. `None` signifies that this
-    /// ringbuffer is uninitialized.
-    pub fn frame_shape(&self) -> Option<&Vec<usize>> {
-        self.frame_shape.get()
     }
 
     /// Acquire the lock and push to the buffer.
     fn lock_push(&self, frame: Frame<T>) {
-        let mut guard = self.frames.write().unwrap();
+        let mut guard = self.frames.lock();
         if guard.len() == RING_CAPACITY {
             guard.pop_front(); // evict oldest
         }
@@ -97,12 +75,8 @@ where
         indices: &[usize],
         axis: usize,
     ) -> Result<(), String> {
-        if self.frame_shape.get().is_none() {
-            return Err("Cannot push to an uninitialized buffer. Try calling `init`!".into());
-        }
-
         let key: u64 = id.into();
-        let mut guard = self.partial_frames.write().unwrap();
+        let mut guard = self.partial_frames.lock();
 
         if !guard.contains_key(&key) {
             // `id` should be monotonically increasing, so drop sample
@@ -116,7 +90,7 @@ where
                 }
             }
             // Create a new frame and insert it
-            let new_frame: Frame<T> = Frame::new(key, self.frame_shape.get().unwrap(), axis);
+            let new_frame: Frame<T> = Frame::new(key, &self.frame_shape, axis);
             // Evict the oldest frame and push to the buffer if it seems to
             // have received a reasonable number of samples
             if guard.len() == PARTIAL_FRAME_CAPACITY {
@@ -155,13 +129,12 @@ where
     /// Add a ``Vec`` to the ringbuffer, converting it into [`ArrayD`].
     pub fn push_vec(
         &self,
-        vec: &Vec<T>,
-        shape: &[usize],
+        vec: &[T],
         id: impl Into<u64>,
         indices: &[usize],
         axis: usize,
     ) -> Result<(), String> {
-        let arr: ArrayD<T> = ArrayD::from_shape_vec(shape, (*vec).clone())
+        let arr: ArrayD<T> = ArrayD::from_shape_vec(self.frame_shape.clone(), vec.to_owned())
             .map_err(|e| format!("Failed to construct array from vec: {e}"))?;
 
         self.push_array(&arr, id, indices, axis)
@@ -171,27 +144,39 @@ where
     ///
     /// The lock is released before returning.
     fn snapshot(&self) -> Vec<Frame<T>> {
-        self.frames.read().unwrap().iter().cloned().collect()
+        self.frames.lock().iter().cloned().collect()
     }
 
     /// Return a copy of the most recent frame
     pub fn last(&self) -> Option<Frame<T>> {
-        self.frames.read().unwrap().back().cloned()
+        self.frames.lock().back().cloned()
     }
 
     /// Return an `N+1` dimensional [`ArrayD`] stacked over an axis, or `None`
     /// if no frames available.
     ///
     /// Propagates errors from `ndarray::stack`.
-    pub fn stack(&self, axis: impl Into<usize>) -> Option<ArrayD<T>> {
+    pub fn stack(&self, axis: impl Into<Option<usize>>) -> Option<ArrayD<T>> {
         // Grab a snapshot of the current buffer and relase lock
         let snapshot: Vec<Frame<T>> = self.snapshot();
         // `stack` requires views
         let views: Vec<_> = snapshot.iter().map(|f| f.array.view()).collect();
 
-        ndarray::stack(Axis(axis.into()), &views).ok()
-    }
+        let axis = axis.into();
 
+        let ax = match axis {
+            Some(axis) => Axis(axis),
+            None => Axis(self.frame_shape.len()),
+        };
+
+        ndarray::stack(ax, &views).ok()
+    }
+}
+
+impl<T> RingBuffer<T>
+where
+    T: Num + Clone + Serialize,
+{
     /// Serialize.
     pub fn serialize(&self) -> Result<Vec<Value>, serde_json::Error> {
         let snapshot: Vec<Frame<T>> = self.snapshot();

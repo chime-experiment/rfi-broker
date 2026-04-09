@@ -77,7 +77,7 @@ impl Default for Metrics {
 /// called from an async function run using ``tokio::spawn``.
 pub fn update_metrics(metrics: &SharedMetrics, state: &SharedDataState) {
     // Use just the most recent frame
-    if let Some(frac_flagged) = state.frac_flagged.last() {
+    if let Some(frac_flagged) = state.frac_flagged.get().unwrap().last() {
         // Iterate frequencies and update for each
         for (ii, val) in frac_flagged.array.iter().enumerate() {
             let label: String = ii.to_string();
@@ -88,7 +88,7 @@ pub fn update_metrics(metrics: &SharedMetrics, state: &SharedDataState) {
         }
     }
 
-    if let Some(sktilde) = state.sktilde_avg.last() {
+    if let Some(sktilde) = state.sktilde_avg.get().unwrap().last() {
         for (ii, val) in sktilde.array.iter().enumerate() {
             let label: String = ii.to_string();
             metrics
@@ -97,17 +97,4 @@ pub fn update_metrics(metrics: &SharedMetrics, state: &SharedDataState) {
                 .set(f64::from(*val));
         }
     }
-}
-
-/// Update all metrics based on a [`SharedDataState`].
-///
-/// This is independent of the trigger mechanism.
-#[allow(dead_code)]
-pub fn update_extra_metrics(metrics: &SharedMetrics, state: &SharedDataState) {
-    // NB: any other metric updates can go here. This is intended to decouple
-    // the trivial updates, which can happen frequently, from anything more
-    // complicated (as-needed).
-    // NB: for example, if we wanted to expose the bad_input_likelihood as a metric,
-    // we would probably want it to be computed at a lower cadence.
-    update_metrics(metrics, state);
 }

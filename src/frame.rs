@@ -37,7 +37,6 @@ where
         }
     }
 
-    // NB: explicitly assume that the order of `indices` and `chunk` are the same
     pub fn insert(&mut self, indices: &[usize], chunk: &ArrayViewD<T>) -> Result<(), String> {
         if self.is_full() {
             return Err("tried to write to a frame that's already full!".into());

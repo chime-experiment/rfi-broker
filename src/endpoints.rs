@@ -12,7 +12,14 @@ use crate::metrics::SharedMetrics;
 ///
 /// Returns `500` if serialisation fails.
 pub async fn metadata(State(state): State<SharedDataState>) -> impl IntoResponse {
-    let meta: serde_json::Value = serde_json::to_value(*state.metadata.read().unwrap())
+    let Some(meta) = state.metadata.get() else {
+        return Err::<_, (StatusCode, String)>((
+            StatusCode::NO_CONTENT,
+            "metadata not available".into(),
+        ));
+    };
+
+    let meta: serde_json::Value = serde_json::to_value(*meta.lock())
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     // TODO: get this working somehow
@@ -31,33 +38,38 @@ pub async fn data(State(state): State<SharedDataState>) -> impl IntoResponse {
     let mut result = serde_json::Map::new();
 
     // Dump all the current buffers
-    let frac_flagged = state
-        .frac_flagged
-        .serialize()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if let Some(frac_flagged) = state.frac_flagged.get() {
+        let frac_flagged = frac_flagged
+            .serialize()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let sktilde_avg = state
-        .sktilde_avg
-        .serialize()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        result.insert(
+            "frac_flagged".into(),
+            json!({"frame_count": frac_flagged.len(), "frames": frac_flagged}),
+        );
+    }
 
-    let bad_feed_counts = state
-        .bad_feed_counts
-        .serialize()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if let Some(sktilde_avg) = state.sktilde_avg.get() {
+        let sktilde_avg = sktilde_avg
+            .serialize()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    result.insert(
-        "frac_flagged".into(),
-        json!({"frame_count": frac_flagged.len(), "frames": frac_flagged}),
-    );
-    result.insert(
-        "sktilde_avg".into(),
-        json!({"frame_count": sktilde_avg.len(), "frames": sktilde_avg}),
-    );
-    result.insert(
-        "bad_feed_counts".into(),
-        json!({"frame_count": bad_feed_counts.len(), "frames": bad_feed_counts}),
-    );
+        result.insert(
+            "sktilde_avg".into(),
+            json!({"frame_count": sktilde_avg.len(), "frames": sktilde_avg}),
+        );
+    }
+
+    if let Some(bad_feed_counts) = state.bad_feed_counts.get() {
+        let bad_feed_counts = bad_feed_counts
+            .serialize()
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        result.insert(
+            "bad_feed_counts".into(),
+            json!({"frame_count": bad_feed_counts.len(), "frames": bad_feed_counts}),
+        );
+    }
 
     Ok::<_, (StatusCode, String)>(Json(result))
 }
@@ -92,7 +104,8 @@ pub async fn get_bad_input_likelihood(
 
             result.insert(
                 "bad_input_likelihood".into(),
-                serde_json::to_value(&metric).unwrap(),
+                serde_json::to_value(&metric)
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
             );
 
             Ok::<_, (StatusCode, String)>(Json(result))
@@ -103,51 +116,47 @@ pub async fn get_bad_input_likelihood(
 
 /// Compute the likelihood that an input is bad, based on a [freq, input, time]
 /// array.
-fn compute_bad_input_likelihood(state: &SharedDataState) -> Result<ArrayD<f32>, String> {
+fn compute_bad_input_likelihood(state: &SharedDataState) -> Result<ArrayD<f64>, String> {
     // Grab the buffer if it exists
-    let buf = &state.bad_feed_counts;
-
-    // Stack the buffer over a trailing axis and grab the underlying [`ArrayD`]
-    let Some(frame_shape): Option<&Vec<usize>> = buf.frame_shape() else {
-        return Err("data buffer is not initialized".into());
+    let Some(buf) = &state.bad_feed_counts.get() else {
+        return Err("data buffer not initialized".into());
     };
-    let ax: usize = frame_shape.len();
 
-    let Some(arr): &Option<ArrayD<u8>> = &buf.stack(ax) else {
+    let Some(arr) = &buf.stack(None) else {
         return Err("data buffer is empty".into());
     };
 
     // Compute the per-feed likelihood metric. This is guaranteed
     // to succeed because call to `&buf.stack` above would have
     // failed if the array was empty
-    let mean_val: ArrayD<u8> = arr.mean_axis(Axis(ax)).unwrap();
+    let mean_val: ArrayD<u8> = arr.mean_axis(Axis(arr.ndim())).unwrap();
 
     // let median: ArrayD<u8> = mean_val.quantile_axis_mut(Axis(0), 0.5, &Linear)?;
-    let mut median: ArrayD<f32> = median_axis(&mean_val.view(), Axis(0));
+    let mut median: ArrayD<f64> = median_axis(&mean_val.view(), Axis(0));
 
     // Convert to a percentage and normalize by the number of frames per packet
-    // NB: this is what was done before, but inclear as to why
-    #[allow(clippy::cast_precision_loss)]
-    let norm = 100.0 / state.metadata.read().unwrap().frames_per_packet as f32;
+    // NB: this is what was done before, but unclear as to why
+    // #[allow(clippy::cast_precision_loss)]
+    let norm = 100.0 / f64::from(state.metadata.get().unwrap().lock().frames_per_packet);
     median *= norm;
 
     Ok(median)
 }
 
-fn median_axis<D>(arr: &ArrayView<u8, D>, axis: Axis) -> Array<f32, D::Smaller>
+fn median_axis<D>(arr: &ArrayView<u8, D>, axis: Axis) -> Array<f64, D::Smaller>
 where
     D: Dimension + RemoveAxis,
 {
     arr.map_axis(axis, |lane| {
-        let mut v: Vec<f32> = lane.iter().map(|&x| f32::from(x)).collect();
+        let mut v: Vec<f64> = lane.iter().map(|&x| f64::from(x)).collect();
         let mid = v.len() / 2;
 
-        v.select_nth_unstable_by(mid, f32::total_cmp);
+        v.select_nth_unstable_by(mid, f64::total_cmp);
         let upper = v[mid];
 
         if v.len().is_multiple_of(2) {
-            v.select_nth_unstable_by(mid - 1, f32::total_cmp);
-            f32::midpoint(v[mid - 1], upper)
+            v.select_nth_unstable_by(mid - 1, f64::total_cmp);
+            f64::midpoint(v[mid - 1], upper)
         } else {
             upper
         }

@@ -10,7 +10,6 @@ use clap::Parser;
 
 mod datastate;
 mod endpoints;
-mod frame;
 mod metrics;
 mod packet;
 mod ringbuffer;

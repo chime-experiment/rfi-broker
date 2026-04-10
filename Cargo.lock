@@ -334,22 +334,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "http-server"
-version = "0.1.0"
-dependencies = [
- "axum",
- "binrw",
- "clap",
- "ndarray",
- "num-traits",
- "parking_lot",
- "prometheus",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "httparse"
 version = "1.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -651,6 +635,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
 dependencies = [
  "bitflags",
+]
+
+[[package]]
+name = "rfi-receiver"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "binrw",
+ "clap",
+ "ndarray",
+ "num-traits",
+ "parking_lot",
+ "prometheus",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

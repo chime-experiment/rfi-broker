@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, VecDeque};
 use serde::Serialize;
 use serde_json::Value;
 
-use ndarray::{ArrayD, Axis};
+use ndarray::{Array2, ArrayD, Axis};
 use num_traits::Num;
 
 use crate::frame::Frame;
@@ -76,6 +76,7 @@ where
         axis: usize,
     ) -> Result<(), String> {
         let key: u64 = id.into();
+        // Want to hold this lock throughout this whole op
         let mut guard = self.partial_frames.lock();
 
         if !guard.contains_key(&key) {
@@ -127,14 +128,16 @@ where
     }
 
     /// Add a ``Vec`` to the ringbuffer, converting it into [`ArrayD`].
+    ///
+    /// The ``Vec`` is consumed so that we can avoid a copy.
     pub fn push_vec(
         &self,
-        vec: &[T],
+        vec: Vec<T>,
         id: impl Into<u64>,
         indices: &[usize],
         axis: usize,
     ) -> Result<(), String> {
-        let arr: ArrayD<T> = ArrayD::from_shape_vec(self.frame_shape.clone(), vec.to_owned())
+        let arr: ArrayD<T> = ArrayD::from_shape_vec(self.frame_shape.clone(), vec)
             .map_err(|e| format!("Failed to construct array from vec: {e}"))?;
 
         self.push_array(&arr, id, indices, axis)
@@ -156,7 +159,7 @@ where
     /// if no frames available.
     ///
     /// Propagates errors from `ndarray::stack`.
-    pub fn stack(&self, axis: impl Into<Option<usize>>) -> Option<ArrayD<T>> {
+    pub fn stack_array(&self, axis: impl Into<Option<usize>>) -> Option<ArrayD<T>> {
         // Grab a snapshot of the current buffer and relase lock
         let snapshot: Vec<Frame<T>> = self.snapshot();
         // `stack` requires views
@@ -170,6 +173,22 @@ where
         };
 
         ndarray::stack(ax, &views).ok()
+    }
+
+    /// Stack the frame masks
+    pub fn stack_mask(&self) -> Option<Array2<u8>> {
+        // Get a snapshot of the current buffer and release lock
+        let snapshot: Vec<Frame<T>> = self.snapshot();
+        // Sort out the shape
+        let nrows = snapshot[0].mask.len();
+        let ncols = snapshot.len();
+        // Masks are 1-dimensional, so stack over the first axis
+        let flat_vec: Vec<u8> = snapshot
+            .into_iter()
+            .flat_map(|f| f.mask.into_iter().map(u8::from)) // return u8 instead of bool
+            .collect();
+
+        ndarray::Array2::<u8>::from_shape_vec((nrows, ncols), flat_vec).ok()
     }
 }
 

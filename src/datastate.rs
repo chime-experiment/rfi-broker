@@ -27,14 +27,14 @@ pub type SharedDataState = Arc<DataState>;
 
 impl DataState {
     /// Push a packet to the state, initializing on first push.
-    pub fn push(&self, packet: &Packet) -> Result<u64, String> {
+    pub fn push(&self, packet: Packet) -> Result<u64, String> {
         // Push to each ringbuffer
-        let body: &Body = &packet.body;
-        let header: &Header = &packet.header;
+        let body: Body = packet.body;
+        let header: Header = packet.header;
 
         // Check that the metadata is as-expected
         self.metadata
-            .get_or_init(|| Mutex::new(*header))
+            .get_or_init(|| Mutex::new(header))
             .lock()
             .check_expected_equal(&packet.header)?;
 
@@ -45,11 +45,11 @@ impl DataState {
 
         self.frac_flagged
             .get_or_init(|| RingBuffer::<f32>::new(vec![header.num_local_freq as usize]))
-            .push_vec(&body.frac_flagged, id, &indices, axis)?;
+            .push_vec(body.frac_flagged, id, &indices, axis)?;
 
         self.sktilde_avg
             .get_or_init(|| RingBuffer::<f32>::new(vec![header.num_local_freq as usize]))
-            .push_vec(&body.sktilde_avg, id, &indices, axis)?;
+            .push_vec(body.sktilde_avg, id, &indices, axis)?;
 
         self.bad_feed_counts
             .get_or_init(|| {
@@ -58,10 +58,10 @@ impl DataState {
                     header.num_elements as usize,
                 ])
             })
-            .push_vec(&body.bad_feed_counts, id, &indices, axis)?;
+            .push_vec(body.bad_feed_counts, id, &indices, axis)?;
 
         // Update the metadata since we got here
-        *self.metadata.get().unwrap().lock() = *header;
+        *self.metadata.get().unwrap().lock() = header;
 
         Ok(id)
     }

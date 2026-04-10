@@ -3,7 +3,7 @@
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde_json::json;
 
-use ndarray::{Array, ArrayD, ArrayView, Axis, Dimension, RemoveAxis};
+use ndarray::{Array, Array2, ArrayD, ArrayView, ArrayViewD, Axis, Dimension, RemoveAxis};
 
 use crate::datastate::SharedDataState;
 use crate::metrics::SharedMetrics;
@@ -122,16 +122,18 @@ fn compute_bad_input_likelihood(state: &SharedDataState) -> Result<ArrayD<f64>, 
         return Err("data buffer not initialized".into());
     };
 
-    let Some(arr) = &buf.stack(None) else {
+    let Some(arr) = &buf.stack_array(None) else {
         return Err("data buffer is empty".into());
+    };
+
+    let Some(mask) = &buf.stack_mask() else {
+        return Err("data buffer incorrectly formatted".into());
     };
 
     // Compute the per-feed likelihood metric. This is guaranteed
     // to succeed because call to `&buf.stack` above would have
     // failed if the array was empty
-    let mean_val: ArrayD<u8> = arr.mean_axis(Axis(arr.ndim())).unwrap();
-
-    // let median: ArrayD<u8> = mean_val.quantile_axis_mut(Axis(0), 0.5, &Linear)?;
+    let mean_val = masked_mean_first_axis(arr, mask)?;
     let mut median: ArrayD<f64> = median_axis(&mean_val.view(), Axis(0));
 
     // Convert to a percentage and normalize by the number of frames per packet
@@ -141,6 +143,23 @@ fn compute_bad_input_likelihood(state: &SharedDataState) -> Result<ArrayD<f64>, 
     median *= norm;
 
     Ok(median)
+}
+
+fn masked_mean_first_axis(arr: &ArrayD<u8>, mask: &Array2<u8>) -> Result<ArrayD<u8>, String> {
+    let sum: ArrayD<u8> = arr.sum_axis(Axis(arr.ndim()));
+    let norm = mask.sum_axis(Axis(1));
+
+    let mean_val: Vec<ArrayD<u8>> = sum
+        .axis_iter(Axis(0))
+        .zip(norm.iter())
+        .filter(|(_, &val)| val > 0)
+        .map(|(slice, &val)| &slice / val)
+        .collect();
+
+    // Convert to views and stack
+    let mean_val: Vec<ArrayViewD<u8>> = mean_val.iter().map(|x| x.view()).collect();
+
+    ndarray::stack(Axis(0), &mean_val).map_err(|e| e.to_string())
 }
 
 fn median_axis<D>(arr: &ArrayView<u8, D>, axis: Axis) -> Array<f64, D::Smaller>

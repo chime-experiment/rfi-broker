@@ -107,35 +107,40 @@ async fn packet_handler(
 
     // NB: it's possible that this could become a bottleneck, in which
     // case we could make it multi-threaded
-    // TODO: track lost packets somehow
     while let Some(event) = packet_rx.recv().await {
-        // TODO: can we clean up this nested match?
+        // Increment received packet counter
+        metrics.packet_loss.inc_total();
+
+        // Handle the packet. Increment the lost packet counter
+        // if an error occurs at any step here.
         match event {
             Ok(bytes) => {
-                let packet_id = match Packet::parse(&bytes) {
+                // Try to push the packet to the datastate
+                match Packet::parse(&bytes) {
                     Ok(packet) => match state.push(packet) {
-                        Ok(id) => id,
+                        // Success - update metrics if this is part of
+                        // a new data sample
+                        Ok(id) => {
+                            if id != last_update_id {
+                                last_update_id = id;
+                                update_metrics(&metrics, &state);
+                            }
+                        }
                         Err(e) => {
+                            metrics.packet_loss.inc_lost();
                             eprintln!("Error pushing packet to state: {e}");
-                            // Skip the metrics update
-                            continue;
                         }
                     },
                     Err(e) => {
+                        metrics.packet_loss.inc_lost();
                         eprintln!("Error parsing packet: {e}");
-                        // Skip the metrics update
-                        continue;
                     }
-                };
-                // Only update metrics if the packet has a different
-                // ID from the last one seen.
-                if packet_id != last_update_id {
-                    last_update_id = packet_id;
-                    // Only update computationally cheap metrics
-                    update_metrics(&metrics, &state);
                 }
             }
-            Err(err) => eprintln!("UDP receive error: {err}"),
+            Err(err) => {
+                metrics.packet_loss.inc_lost();
+                eprintln!("UDP receive error: {err}");
+            }
         }
     }
 }
@@ -147,7 +152,7 @@ async fn packet_handler(
 /// Panics if either address cannot be bound.
 pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr) {
     let state: SharedDataState = Arc::new(DataState::default());
-    let metrics: SharedMetrics = Arc::new(Metrics::default());
+    let metrics: SharedMetrics = Arc::new(Metrics::new());
     // Creates the mpsc channel used to send [`PacketEvent`]s from the UDP
     // listener to the handler.
     // The channel is bounded to 2048 events; if the updater falls behind, senders

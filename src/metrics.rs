@@ -1,20 +1,55 @@
 //! Prometheus metrics.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use prometheus::{GaugeVec, Opts, Registry, TextEncoder};
+use prometheus::{Gauge, GaugeVec, Opts, Registry, TextEncoder};
 
 use crate::datastate::SharedDataState;
 
+/// Tracker for a sample loss count/fraction
+#[derive(Default)]
+pub struct SampleLossTracker {
+    total: Arc<AtomicU64>,
+    lost: Arc<AtomicU64>,
+}
+
+impl SampleLossTracker {
+    pub fn inc_total(&self) {
+        self.total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_lost(&self) {
+        self.lost.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    pub fn frac_lost(&self) -> f64 {
+        let total = self.total.load(Ordering::Relaxed) as f64;
+        let lost = self.lost.load(Ordering::Relaxed) as f64;
+
+        if total < f64::EPSILON {
+            0.0
+        } else {
+            lost / total
+        }
+    }
+}
+
 /// Metrics store
 pub struct Metrics {
-    /// # Exposed metrics
+    /// # Prometheus metrics
     /// Prometheus registry
-    pub registry: Registry,
+    registry: Registry,
     /// Fraction of flagged samples per frequency
-    pub frac_flagged: GaugeVec,
+    frac_flagged_prom: GaugeVec,
     /// Average SK value per frequency
-    pub sktilde: GaugeVec,
+    sktilde_prom: GaugeVec,
+    /// Dropped packet fraction
+    packet_loss_prom: Gauge,
+    /// # Externally-visible metrics handlers
+    /// Packet lost count tracker
+    pub packet_loss: SampleLossTracker,
 }
 
 /// Alias for shared metrics type
@@ -25,7 +60,7 @@ impl Metrics {
     pub fn new() -> Self {
         let registry = Registry::new();
 
-        let frac_flagged = GaugeVec::new(
+        let frac_flagged_prom = GaugeVec::new(
             Opts::new(
                 "rfi_receiver_kotekan_first_stage_frac_flagged",
                 "Fraction of RFI samples flagged by kotekan in the first-stage excision.",
@@ -34,7 +69,7 @@ impl Metrics {
         )
         .unwrap();
 
-        let sktilde = GaugeVec::new(
+        let sktilde_prom = GaugeVec::new(
             Opts::new(
                 "rfi_receiver_kotekan_sktilde_avg",
                 "Feed-averaged Spectral Kurtosis integrated over ~1.2 seconds.",
@@ -43,29 +78,35 @@ impl Metrics {
         )
         .unwrap();
 
-        registry.register(Box::new(frac_flagged.clone())).unwrap();
-        registry.register(Box::new(sktilde.clone())).unwrap();
+        let packet_loss_prom = Gauge::new(
+            "rfi_receiver_lost_packets_frac",
+            "Fraction of dropped or mishandled packets, not including those dropped at the OS level."
+        ).unwrap();
+
+        registry
+            .register(Box::new(frac_flagged_prom.clone()))
+            .unwrap();
+        registry.register(Box::new(sktilde_prom.clone())).unwrap();
+        registry
+            .register(Box::new(packet_loss_prom.clone()))
+            .unwrap();
 
         Self {
             registry,
-            frac_flagged,
-            sktilde,
+            frac_flagged_prom,
+            sktilde_prom,
+            packet_loss_prom,
+            packet_loss: SampleLossTracker::default(),
         }
     }
 
     /// Render all metrics
-    pub fn render(&self) -> String {
+    pub fn serialize(&self) -> String {
         let encoder = TextEncoder::new();
         let metric_families = self.registry.gather();
         encoder
             .encode_to_string(&metric_families)
             .unwrap_or_else(|e| format!("error encoding metrics: {e}\n"))
-    }
-}
-
-impl Default for Metrics {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -79,22 +120,34 @@ pub fn update_metrics(metrics: &SharedMetrics, state: &SharedDataState) {
     // Use just the most recent frame
     if let Some(frac_flagged) = state.frac_flagged.get().unwrap().last() {
         // Iterate frequencies and update for each
-        for (ii, val) in frac_flagged.array.iter().enumerate() {
-            let label: String = ii.to_string();
+        for (label, val) in frac_flagged
+            .array
+            .iter()
+            .enumerate()
+            .map(|(i, val)| (i.to_string(), val))
+        {
             metrics
-                .frac_flagged
+                .frac_flagged_prom
                 .with_label_values(&[&label])
                 .set(f64::from(*val));
         }
     }
 
     if let Some(sktilde) = state.sktilde_avg.get().unwrap().last() {
-        for (ii, val) in sktilde.array.iter().enumerate() {
-            let label: String = ii.to_string();
+        for (label, val) in sktilde
+            .array
+            .iter()
+            .enumerate()
+            .map(|(i, val)| (i.to_string(), val))
+        {
             metrics
-                .sktilde
+                .sktilde_prom
                 .with_label_values(&[&label])
                 .set(f64::from(*val));
         }
     }
+
+    metrics
+        .packet_loss_prom
+        .set(metrics.packet_loss.frac_lost());
 }

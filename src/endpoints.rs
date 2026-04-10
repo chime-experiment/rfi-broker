@@ -22,12 +22,6 @@ pub async fn metadata(State(state): State<SharedDataState>) -> impl IntoResponse
     let meta: serde_json::Value = serde_json::to_value(*meta.lock())
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    // TODO: get this working somehow
-    // Add the expected node count from [`Metrics`], if it exists
-    // if let Some(node_count) = metrics.expected_node_count {
-    //     meta["expected_node_count"] = json!(node_count);
-    // }
-
     Ok::<_, (StatusCode, String)>(Json(meta))
 }
 
@@ -76,7 +70,7 @@ pub async fn data(State(state): State<SharedDataState>) -> impl IntoResponse {
 
 /// `GET /metrics` - dumps the current prometheus metrics.
 pub async fn metrics(State(m): State<SharedMetrics>) -> impl IntoResponse {
-    Ok::<_, (StatusCode, String)>(Json(m.render()))
+    Ok::<_, (StatusCode, String)>(Json(m.serialize()))
 }
 
 /// `GET /` - dumps the result of `bad_input_likelihood`.

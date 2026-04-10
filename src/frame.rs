@@ -16,7 +16,7 @@ pub struct Frame<T> {
     /// Arbitrary-sized array
     pub array: ArrayD<T>,
     /// Track how many slices of the array exist
-    received: Vec<bool>,
+    pub mask: Vec<bool>,
     /// Track how many samples have already been written
     received_count: u64,
     /// Track the axis over which this frame can be split
@@ -31,7 +31,7 @@ where
         Self {
             id: id.into(),
             array: ArrayD::<T>::zeros(IxDyn(shape)),
-            received: vec![false; shape.to_vec()[axis]],
+            mask: vec![false; shape.to_vec()[axis]],
             received_count: 0,
             axis,
         }
@@ -53,14 +53,14 @@ where
         let split_ax = Axis(self.axis);
 
         for idx in indices {
-            if self.received[*idx] {
+            if self.mask[*idx] {
                 return Err("tried to insert an index which has already been written".into());
             }
             self.array
                 .index_axis_mut(split_ax, *idx)
                 .assign(&chunk.index_axis(split_ax, *idx));
             // Also record that these indices have been written
-            self.received[*idx] = true;
+            self.mask[*idx] = true;
             self.received_count += 1;
         }
 

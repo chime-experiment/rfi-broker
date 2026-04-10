@@ -55,7 +55,10 @@ type PacketEvent = Result<Vec<u8>, Box<dyn std::error::Error + Send>>;
 ///
 /// # Panics
 /// Panics if the socket cannot be bound.
-async fn packet_recv(addr: SocketAddr, event_tx: mpsc::Sender<PacketEvent>) -> std::io::Result<()> {
+async fn packet_recv(
+    addr: SocketAddr,
+    packet_tx: mpsc::Sender<PacketEvent>,
+) -> std::io::Result<()> {
     let socket = UdpSocket::bind(addr).await?;
 
     println!("UDP listener bound to {addr}");
@@ -71,7 +74,7 @@ async fn packet_recv(addr: SocketAddr, event_tx: mpsc::Sender<PacketEvent>) -> s
         loop {
             match socket.try_recv_from(&mut buf) {
                 Ok((len, _)) => {
-                    let _ = event_tx.try_send(Ok(buf[..len].to_vec()));
+                    let _ = packet_tx.try_send(Ok(buf[..len].to_vec()));
                 }
                 Err(ref e) if e.kind() == WouldBlock => {
                     // No packet available, so assume that we've pulled
@@ -79,7 +82,7 @@ async fn packet_recv(addr: SocketAddr, event_tx: mpsc::Sender<PacketEvent>) -> s
                     break;
                 }
                 Err(e) => {
-                    let _ = event_tx.try_send(Err(Box::new(e)));
+                    let _ = packet_tx.try_send(Err(Box::new(e)));
                 }
             }
         }
@@ -96,7 +99,7 @@ async fn packet_recv(addr: SocketAddr, event_tx: mpsc::Sender<PacketEvent>) -> s
 /// complicated metrics, best approach is likely to switch to a fixed
 /// cadence instead of packet event.
 async fn packet_handler(
-    mut rx: mpsc::Receiver<PacketEvent>,
+    mut packet_rx: mpsc::Receiver<PacketEvent>,
     metrics: SharedMetrics,
     state: SharedDataState,
 ) {
@@ -104,20 +107,23 @@ async fn packet_handler(
 
     // NB: it's possible that this could become a bottleneck, in which
     // case we could make it multi-threaded
-    while let Some(event) = rx.recv().await {
+    // TODO: track lost packets somehow
+    while let Some(event) = packet_rx.recv().await {
         // TODO: can we clean up this nested match?
         match event {
             Ok(bytes) => {
                 let packet_id = match Packet::parse(&bytes) {
-                    Ok(packet) => match state.push(&packet) {
+                    Ok(packet) => match state.push(packet) {
                         Ok(id) => id,
                         Err(e) => {
                             eprintln!("Error pushing packet to state: {e}");
+                            // Skip the metrics update
                             continue;
                         }
                     },
                     Err(e) => {
                         eprintln!("Error parsing packet: {e}");
+                        // Skip the metrics update
                         continue;
                     }
                 };
@@ -129,9 +135,7 @@ async fn packet_handler(
                     update_metrics(&metrics, &state);
                 }
             }
-            Err(err) => {
-                eprintln!("{err}");
-            } // TODO: increment a metric
+            Err(err) => eprintln!("UDP receive error: {err}"),
         }
     }
 }
@@ -145,7 +149,7 @@ pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr) {
     let state: SharedDataState = Arc::new(DataState::default());
     let metrics: SharedMetrics = Arc::new(Metrics::default());
     // Creates the mpsc channel used to send [`PacketEvent`]s from the UDP
-    // listener to the metrics updater. Returns `(sender, receiver)`.
+    // listener to the handler.
     // The channel is bounded to 2048 events; if the updater falls behind, senders
     // use [`try_send`](mpsc::Sender::try_send) and drop events rather than
     // blocking the UDP loop.

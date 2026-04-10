@@ -13,14 +13,84 @@ use std::collections::{BTreeMap, VecDeque};
 use serde::Serialize;
 use serde_json::Value;
 
-use ndarray::{Array2, ArrayD, Axis};
+use ndarray::{Array2, ArrayD, ArrayViewD, Axis, IxDyn};
 use num_traits::Num;
-
-use crate::frame::Frame;
 
 /// Maximum number of array frames retained in the ring buffer.
 const RING_CAPACITY: usize = 64;
 const PARTIAL_FRAME_CAPACITY: usize = 8;
+
+/// Single [`RingBuffer`] frame.
+///
+/// Contains an array and ID.
+#[derive(Clone, Debug, Serialize)]
+pub struct Frame<T> {
+    /// Numeric identifier
+    pub id: u64,
+    /// Arbitrary-sized array
+    pub array: ArrayD<T>,
+    /// Track how many slices of the array exist
+    pub mask: Vec<bool>,
+    /// Track how many samples have already been written
+    received_count: u64,
+    /// Track the axis over which this frame can be split
+    axis: usize,
+}
+
+impl<T> Frame<T>
+where
+    T: Num + Clone,
+{
+    pub fn new(id: impl Into<u64>, shape: &[usize], axis: usize) -> Frame<T> {
+        Self {
+            id: id.into(),
+            array: ArrayD::<T>::zeros(IxDyn(shape)),
+            mask: vec![false; shape.to_vec()[axis]],
+            received_count: 0,
+            axis,
+        }
+    }
+
+    pub fn insert(&mut self, indices: &[usize], chunk: &ArrayViewD<T>) -> Result<(), String> {
+        if self.is_full() {
+            return Err("tried to write to a frame that's already full!".into());
+        }
+
+        if indices.len() != chunk.shape()[self.axis] {
+            return Err(format!(
+                "number of indices does not match chunk shape: {} != {}",
+                indices.len(),
+                chunk.shape()[self.axis]
+            ));
+        }
+        // Don't assume that indices are contiguous
+        let axis = Axis(self.axis);
+
+        for idx in indices {
+            if self.mask[*idx] {
+                return Err("tried to insert an index which has already been written".into());
+            }
+            self.array
+                .index_axis_mut(axis, *idx)
+                .assign(&chunk.index_axis(axis, *idx));
+            // Also record that these indices have been written
+            self.mask[*idx] = true;
+            self.received_count += 1;
+        }
+
+        Ok(())
+    }
+
+    /// `true` if this frame has received all expected samples
+    pub fn is_full(&self) -> bool {
+        self.received_count == self.array.shape()[self.axis] as u64
+    }
+
+    /// Getter for the sample count
+    pub fn sample_count(&self) -> u64 {
+        self.received_count
+    }
+}
 
 /// Ring buffer of decoded frames, shared across tasks.
 ///
@@ -74,7 +144,7 @@ where
         id: impl Into<u64>,
         indices: &[usize],
         axis: usize,
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
         let key: u64 = id.into();
         // Want to hold this lock throughout this whole op
         let mut guard = self.partial_frames.lock();
@@ -100,7 +170,7 @@ where
                 // of rolling average or something), but it ensures that only frames that
                 // are generally expected to be complete make it into the buffer. The timeout,
                 // then, becomes `PARTIAL_FRAME_CAPACITY * packet_cadence`. However, this
-                // approach introduces a delay equivalent to the full timeout time in the cast
+                // approach introduces a delay equivalent to the full timeout time in the case
                 // where a frame never becomes full.
                 if let Some(last_frame) = self.last() {
                     if frame.sample_count() >= last_frame.sample_count() {
@@ -124,7 +194,7 @@ where
             self.lock_push(filled_frame);
         }
 
-        Ok(())
+        Ok(key)
     }
 
     /// Add a ``Vec`` to the ringbuffer, converting it into [`ArrayD`].
@@ -136,7 +206,7 @@ where
         id: impl Into<u64>,
         indices: &[usize],
         axis: usize,
-    ) -> Result<(), String> {
+    ) -> Result<u64, String> {
         let arr: ArrayD<T> = ArrayD::from_shape_vec(self.frame_shape.clone(), vec)
             .map_err(|e| format!("Failed to construct array from vec: {e}"))?;
 

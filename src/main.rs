@@ -14,6 +14,7 @@ mod metrics;
 mod packet;
 mod ringbuffer;
 mod server;
+mod solar;
 
 /// Command-line parser
 #[derive(Parser)]

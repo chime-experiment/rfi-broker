@@ -1,7 +1,7 @@
 //! Prometheus metrics.
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use prometheus::{Gauge, GaugeVec, Opts, Registry, TextEncoder};
 
@@ -36,6 +36,23 @@ impl SampleLossTracker {
     }
 }
 
+/// Tracker for first/second-stage RFI zeroing
+#[derive(Default)]
+pub struct RFIZeroingTracker {
+    first_stage: Arc<AtomicBool>,
+    second_stage: Arc<AtomicBool>,
+}
+
+impl RFIZeroingTracker {
+    pub fn set_first(&self, value: bool) {
+        self.first_stage.store(value, Ordering::Relaxed);
+    }
+
+    pub fn set_second(&self, value: bool) {
+        self.second_stage.store(value, Ordering::Relaxed);
+    }
+}
+
 /// Metrics store
 pub struct Metrics {
     /// # Prometheus metrics
@@ -50,6 +67,9 @@ pub struct Metrics {
     /// # Externally-visible metrics handlers
     /// Packet lost count tracker
     pub packet_loss: SampleLossTracker,
+    /// Current state of RFI zeroing, according to
+    /// this broker
+    pub rfi_zeroing: RFIZeroingTracker,
 }
 
 /// Alias for shared metrics type
@@ -97,6 +117,7 @@ impl Metrics {
             sktilde_prom,
             packet_loss_prom,
             packet_loss: SampleLossTracker::default(),
+            rfi_zeroing: RFIZeroingTracker::default(),
         }
     }
 
@@ -110,7 +131,7 @@ impl Metrics {
     }
 }
 
-/// Update computationally-simple metrics based on a [`SharedDataState`].
+/// Update Prometheus metrics based on a [`SharedDataState`].
 ///
 /// Only metrics which are trivial to compute should be updated here.
 ///

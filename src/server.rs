@@ -10,14 +10,14 @@ use std::io::ErrorKind::WouldBlock;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use axum::{routing::get, Router};
+use axum::{Router, routing::get};
 
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::mpsc;
 
 use crate::datastate::{DataState, SharedDataState};
 use crate::endpoints;
-use crate::metrics::{update_metrics, Metrics, SharedMetrics};
+use crate::metrics::{Metrics, SharedMetrics, update_metrics};
 use crate::packet::Packet;
 
 /// Builds a [`Router`] containing all the endpoints we'd like to enable.
@@ -55,7 +55,7 @@ type PacketEvent = Result<Vec<u8>, Box<dyn std::error::Error + Send>>;
 ///
 /// # Panics
 /// Panics if the socket cannot be bound.
-async fn packet_recv(
+async fn packet_recv_task(
     addr: SocketAddr,
     packet_tx: mpsc::Sender<PacketEvent>,
 ) -> std::io::Result<()> {
@@ -98,7 +98,7 @@ async fn packet_recv(
 /// this triggers on every new packet. If we wanted to include more
 /// complicated metrics, best approach is likely to switch to a fixed
 /// cadence instead of packet event.
-async fn packet_handler(
+async fn packet_handler_task(
     mut packet_rx: mpsc::Receiver<PacketEvent>,
     metrics: SharedMetrics,
     state: SharedDataState,
@@ -160,12 +160,15 @@ pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr) {
     // blocking the UDP loop.
     let (packet_tx, packet_rx) = mpsc::channel::<PacketEvent>(2048);
 
-    let packet_handler = tokio::spawn(packet_handler(
+    let packet_handler = tokio::spawn(packet_handler_task(
         packet_rx,
         Arc::clone(&metrics),
         Arc::clone(&state),
     ));
-    let packet_recv = tokio::spawn(packet_recv(udp_addr, packet_tx));
+    let packet_recv = tokio::spawn(packet_recv_task(udp_addr, packet_tx));
+
+    // Start the solar event task
+    let solar = tokio::spawn(crate::solar::solar_event_task(Arc::clone(&metrics)));
 
     let listener = TcpListener::bind(http_addr)
         .await
@@ -178,5 +181,6 @@ pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr) {
         _ = packet_handler => eprintln!("Packet handler exited unexpectedly"),
         _ = packet_recv => eprintln!("UDP receiver exited unexpectedly"),
         _ = http => eprintln!("HTTP server exited unexpectedly"),
+        _ = solar => eprintln!("Solar event task exited unexpectedly"),
     }
 }

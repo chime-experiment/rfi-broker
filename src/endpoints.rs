@@ -1,6 +1,6 @@
 //! Axum handlers to expose data.
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use serde_json::json;
 
 use ndarray::{Array, Array2, ArrayD, ArrayView, ArrayViewD, Axis, Dimension, RemoveAxis};
@@ -146,7 +146,7 @@ fn masked_mean_first_axis(arr: &ArrayD<u8>, mask: &Array2<u8>) -> Result<ArrayD<
     let mean_val: Vec<ArrayD<u8>> = sum
         .axis_iter(Axis(0))
         .zip(norm.iter())
-        .filter(|(_, &val)| val > 0)
+        .filter(|(_, val)| **val > 0_u8)
         .map(|(slice, &val)| &slice / val)
         .collect();
 

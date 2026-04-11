@@ -6,13 +6,16 @@ edition = "2024"
 [dependencies]
 axum = "0.7"
 binrw = "0.14"
+chrono = "0.4.44"
 clap = { version = "4.6", features = ["derive"] }
 ndarray = { version = "0.17.2", features = ["serde"] }
 num-traits = "0.2.19"
 parking_lot = "0.12.5"
 prometheus = "0.14.0"
+reqwest = { version = "0.13.2", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sunrise = "3.0.0"
 tokio = { version = "1", features = ["full"] }
 
 [profile.release]

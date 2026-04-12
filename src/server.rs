@@ -11,9 +11,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{Router, routing::get};
-
+use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::{TcpListener, UdpSocket};
-use tokio::sync::mpsc;
 
 use crate::datastate::{DataState, SharedDataState};
 use crate::endpoints;
@@ -43,83 +42,47 @@ fn router(state: SharedDataState, metrics: SharedMetrics) -> Router {
     router.merge(metrics_router)
 }
 
-/// Type for packet event message channel
-type PacketEvent = Result<Vec<u8>, Box<dyn std::error::Error + Send>>;
+/// Construct a UDP socket with a buffer large enough to handle
+/// burst events.
+fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Error> {
+    // Construct a socket large enough to handle burst events
+    let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+    socket.set_recv_buffer_size(8 * 1024 * 1024)?; // 8MB
 
-/// Binds a UDP socket on `addr` and sends [`PacketEvent`] over `event_tx`.
-///
-/// Designed to handle short bursts of many packets. Individual packets are
-/// pushed to the `event_tx` channel to be handled elsewhere.
-///
-/// Runs indefinitely; intended to be spawned with [`tokio::spawn`].
-///
-/// # Panics
-/// Panics if the socket cannot be bound.
-async fn packet_recv_task(
-    addr: SocketAddr,
-    packet_tx: mpsc::Sender<PacketEvent>,
-) -> std::io::Result<()> {
-    let socket = UdpSocket::bind(addr).await?;
+    // log the actual recv buffer size
+    let actual = socket.recv_buffer_size()?;
+    println!("Request 8MB recv buffer, got {}MB", actual / 1024 / 1024);
 
-    println!("UDP listener bound to {addr}");
+    socket.bind(&addr.into())?;
 
-    // Allocate a buffer large enough for any valid UDP datagram.
-    let mut buf = vec![0u8; u16::MAX as usize];
-    // Need to set some metadata on first iteration, then check on
-    // each subsequent iteration
-    loop {
-        // Wait until the socket is readable
-        socket.readable().await?;
-        // Pass through the entire OS buffer
-        loop {
-            match socket.try_recv_from(&mut buf) {
-                Ok((len, _)) => {
-                    let _ = packet_tx.try_send(Ok(buf[..len].to_vec()));
-                }
-                Err(ref e) if e.kind() == WouldBlock => {
-                    // No packet available, so assume that we've pulled
-                    // everything from the OS buffer
-                    break;
-                }
-                Err(e) => {
-                    let _ = packet_tx.try_send(Err(Box::new(e)));
-                }
-            }
-        }
-    }
+    // Convert to a `tokio` `UdpSocket`
+    let socket = std::net::UdpSocket::from(socket);
+
+    UdpSocket::from_std(socket)
 }
 
-/// Drains [`PacketEvent`]s from `rx` and updates metrics.
+/// Drains a UDP socket buffer and pushes packets to the [`DataState`].
 ///
 /// Runs indefinitely - intended to be run with [`tokio::spawn`].
 /// Exits when all senders are dropped.
-///
-/// As-is, this assumes that metrics are very fast to compute, since
-/// this triggers on every new packet. If we wanted to include more
-/// complicated metrics, best approach is likely to switch to a fixed
-/// cadence instead of packet event.
 async fn packet_handler_task(
-    mut packet_rx: mpsc::Receiver<PacketEvent>,
+    sock: UdpSocket,
     metrics: SharedMetrics,
     state: SharedDataState,
-) {
+) -> Result<(), std::io::Error> {
+    // Allocate a buffer large enough for any valid UDP packet
+    let mut buf = vec![0u8; u16::MAX as usize];
+
     let mut last_update_id: u64 = 0;
 
-    // NB: it's possible that this could become a bottleneck, in which
-    // case we could make it multi-threaded
-    while let Some(event) = packet_rx.recv().await {
-        // Increment received packet counter
-        metrics.packet_loss.inc_total();
-
-        // Handle the packet. Increment the lost packet counter
-        // if an error occurs at any step here.
-        match event {
-            Ok(bytes) => {
-                // Try to push the packet to the datastate
-                match Packet::parse(&bytes) {
+    loop {
+        // Wait until socket is readable
+        sock.readable().await?;
+        // Pass through the entire os buffer
+        loop {
+            match sock.try_recv_from(&mut buf) {
+                Ok((len, _)) => match Packet::parse(&buf[..len]) {
                     Ok(packet) => match state.push(packet) {
-                        // Success - update metrics if this is part of
-                        // a new data sample
                         Ok(id) => {
                             if id != last_update_id {
                                 last_update_id = id;
@@ -135,12 +98,17 @@ async fn packet_handler_task(
                         metrics.packet_loss.inc_lost();
                         eprintln!("Error parsing packet: {e}");
                     }
+                },
+                Err(ref e) if e.kind() == WouldBlock => {
+                    // No packet available so release the thread
+                    break;
+                }
+                Err(e) => {
+                    metrics.packet_loss.inc_lost();
+                    eprintln!("UDP recv error: {e}");
                 }
             }
-            Err(err) => {
-                metrics.packet_loss.inc_lost();
-                eprintln!("UDP receive error: {err}");
-            }
+            metrics.packet_loss.inc_total();
         }
     }
 }
@@ -153,19 +121,17 @@ async fn packet_handler_task(
 pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr) {
     let state: SharedDataState = Arc::new(DataState::default());
     let metrics: SharedMetrics = Arc::new(Metrics::new());
-    // Creates the mpsc channel used to send [`PacketEvent`]s from the UDP
-    // listener to the handler.
-    // The channel is bounded to 2048 events; if the updater falls behind, senders
-    // use [`try_send`](mpsc::Sender::try_send) and drop events rather than
-    // blocking the UDP loop.
-    let (packet_tx, packet_rx) = mpsc::channel::<PacketEvent>(2048);
+
+    // Construct the socket and start the packet handling task. If this becomes
+    // a bottleneck, it could be run in multiple threads
+    let udp_sock = construct_sock(udp_addr)
+        .unwrap_or_else(|e| panic!("Failed to bind UDP listener on {udp_addr}: {e}"));
 
     let packet_handler = tokio::spawn(packet_handler_task(
-        packet_rx,
+        udp_sock,
         Arc::clone(&metrics),
         Arc::clone(&state),
     ));
-    let packet_recv = tokio::spawn(packet_recv_task(udp_addr, packet_tx));
 
     // Start the solar event task
     let solar = tokio::spawn(crate::solar::solar_event_task(Arc::clone(&metrics)));
@@ -179,7 +145,6 @@ pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr) {
 
     tokio::select! {
         _ = packet_handler => eprintln!("Packet handler exited unexpectedly"),
-        _ = packet_recv => eprintln!("UDP receiver exited unexpectedly"),
         _ = http => eprintln!("HTTP server exited unexpectedly"),
         _ = solar => eprintln!("Solar event task exited unexpectedly"),
     }

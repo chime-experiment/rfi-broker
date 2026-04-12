@@ -152,13 +152,13 @@ where
         if !guard.contains_key(&key) {
             // `id` should be monotonically increasing, so drop sample
             // if it's too old
-            if let Some((&oldest_id, _)) = guard.first_key_value() {
-                if key < oldest_id {
-                    return Err(format!(
-                        "Tried to push data with id {key} older than the \
-                        oldest available entry id {oldest_id}"
-                    ));
-                }
+            if let Some((&oldest_id, _)) = guard.first_key_value()
+                && key < oldest_id
+            {
+                return Err(format!(
+                    "Tried to push data with id {key} older than the \
+                    oldest available entry id {oldest_id}"
+                ));
             }
             // Create a new frame and insert it
             let new_frame: Frame<T> = Frame::new(key, &self.frame_shape, axis);
@@ -172,10 +172,10 @@ where
                 // then, becomes `PARTIAL_FRAME_CAPACITY * packet_cadence`. However, this
                 // approach introduces a delay equivalent to the full timeout time in the case
                 // where a frame never becomes full.
-                if let Some(last_frame) = self.last() {
-                    if frame.sample_count() >= last_frame.sample_count() {
-                        self.lock_push(frame);
-                    }
+                if let Some(last_frame) = self.last()
+                    && frame.sample_count() >= last_frame.sample_count()
+                {
+                    self.lock_push(frame);
                 }
             }
             guard.insert(key, new_frame);

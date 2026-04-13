@@ -23,7 +23,7 @@ const DOWNTIME_S: i64 = 3600; // 1 hour
 
 const FIRST_STAGE_ENDPOINT: &str = "http://csBfs:54323/rfi-zeroing-toggle-first-stage";
 const SECOND_STAGE_ENDPOINT: &str = "http://csBfs:54323/rfi-zeroing-toggle-second-stage";
-const TOGGLE_VALUE: &str = "rfi-zeroing";
+const TARGET: &str = "rfi-zeroing";
 
 /// Convert a Unix timestamp to a [`tokio::time::Instant`].
 ///
@@ -64,13 +64,14 @@ fn solar_noon(coord: Coordinates, days_offset: i64) -> Option<DateTime<Utc>> {
 }
 
 /// Send an enable/disable event to the zeroing endpoint
-async fn post_zeroing_event(
+async fn post_event(
     client: &Client,
     headers: &HeaderMap,
     endpoint: &str,
+    target: &str,
     enable: bool,
 ) -> Result<(), String> {
-    let payload = json!({TOGGLE_VALUE: enable});
+    let payload = json!({target: enable});
 
     let result = client
         .post(endpoint)
@@ -134,11 +135,11 @@ pub async fn solar_event_task(metrics: SharedMetrics) {
         if let Some(t) = unix_to_instant(next_event_start) {
             sleep_until(t).await;
             // Send the second-stage event first
-            match post_zeroing_event(&client, &headers, SECOND_STAGE_ENDPOINT, false).await {
+            match post_event(&client, &headers, SECOND_STAGE_ENDPOINT, TARGET, false).await {
                 Ok(()) => metrics.rfi_zeroing.set_second(false),
                 Err(e) => tracing::warn!("{e}"),
             }
-            match post_zeroing_event(&client, &headers, FIRST_STAGE_ENDPOINT, false).await {
+            match post_event(&client, &headers, FIRST_STAGE_ENDPOINT, TARGET, true).await {
                 Ok(()) => metrics.rfi_zeroing.set_first(false),
                 Err(e) => tracing::warn!("{e}"),
             }
@@ -148,11 +149,11 @@ pub async fn solar_event_task(metrics: SharedMetrics) {
         if let Some(t) = unix_to_instant(next_event_end) {
             sleep_until(t).await;
             // Send the first-stage event first
-            match post_zeroing_event(&client, &headers, FIRST_STAGE_ENDPOINT, true).await {
+            match post_event(&client, &headers, FIRST_STAGE_ENDPOINT, TARGET, true).await {
                 Ok(()) => metrics.rfi_zeroing.set_first(true),
                 Err(e) => tracing::warn!("{e}"),
             }
-            match post_zeroing_event(&client, &headers, SECOND_STAGE_ENDPOINT, true).await {
+            match post_event(&client, &headers, SECOND_STAGE_ENDPOINT, TARGET, true).await {
                 Ok(()) => metrics.rfi_zeroing.set_second(true),
                 Err(e) => tracing::warn!("{e}"),
             }

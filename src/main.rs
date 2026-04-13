@@ -2,20 +2,13 @@
 //!
 //! Parses CLI arguments, loads configuration file, builds a
 //! multi-threaded tokio runtime, and runs the async server.
-#![warn(clippy::pedantic)]
 
 use std::net::SocketAddr;
 
 use clap::Parser;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
-mod datastate;
-mod endpoints;
-mod metrics;
-mod packet;
-mod ringbuffer;
-mod server;
-mod solar;
+use rfi_receiver::server;
 
 /// Command-line parser
 #[derive(Parser)]

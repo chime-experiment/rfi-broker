@@ -31,9 +31,13 @@ const TARGET: &str = "rfi-zeroing";
 ///
 /// Returns `None` if `unix_time` is in the past.
 fn unix_to_instant(unix_time: i64) -> Option<Instant> {
-    let now_unix = SystemTime::now().duration_since(UNIX_EPOCH).ok()?;
+    let now_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_secs()
+        .cast_signed();
 
-    let delta_secs = unix_time - now_unix.as_secs().cast_signed();
+    let delta_secs = unix_time - now_unix;
 
     if delta_secs < 0 {
         return None;
@@ -44,15 +48,16 @@ fn unix_to_instant(unix_time: i64) -> Option<Instant> {
 
 /// Compute solar noon for `days_offset` days from today
 fn solar_noon(coord: Coordinates, days_offset: i64) -> Option<DateTime<Utc>> {
-    let mut unix_time = SystemTime::now()
+    let mut requested_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()?
         .as_secs()
         .cast_signed();
-    unix_time += days_offset * 86_400;
+
+    requested_time += days_offset * 86_400;
 
     // Sort out the sunrise, sunset, and noon
-    let date = DateTime::<Utc>::from_timestamp(unix_time, 0)?.date_naive();
+    let date = DateTime::<Utc>::from_timestamp(requested_time, 0)?.date_naive();
 
     let day = SolarDay::new(coord, date).with_altitude(ALTITUDE);
 
@@ -123,13 +128,14 @@ pub async fn solar_event_task(metrics: SharedMetrics) {
     let coords: Coordinates = Coordinates::new(LATITUDE, LONGITUDE).unwrap();
 
     // One-time calculation of the next solar noon
-    let mut noon_delta = solar_noon(coords, 0).unwrap().timestamp();
-
-    tracing::debug!("Next solar noon in {noon_delta} seconds.");
+    // TODO: handle errors here
+    let mut next_noon = solar_noon(coords, 0).unwrap();
 
     loop {
-        let next_event_start = noon_delta - DOWNTIME_S / 2;
+        let next_event_start = next_noon.timestamp() - DOWNTIME_S / 2;
         let next_event_end = next_event_start + DOWNTIME_S;
+
+        tracing::info!("Next solar noon window at {next_noon}");
 
         // Sleep until the next zeroing disable event
         if let Some(t) = unix_to_instant(next_event_start) {
@@ -162,8 +168,6 @@ pub async fn solar_event_task(metrics: SharedMetrics) {
         }
 
         // Get the next solar noon window
-        noon_delta = solar_noon(coords, 1).unwrap().timestamp();
-
-        tracing::debug!("Next solar noon in {noon_delta} seconds.");
+        next_noon = solar_noon(coords, 1).unwrap();
     }
 }

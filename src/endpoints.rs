@@ -70,7 +70,11 @@ pub async fn data(State(state): State<SharedDataState>) -> impl IntoResponse {
 
 /// `GET /metrics` - dumps the current prometheus metrics.
 pub async fn metrics(State(m): State<SharedMetrics>) -> impl IntoResponse {
-    Ok::<_, (StatusCode, String)>(Json(m.serialize()))
+    let metrics = m
+        .serialize()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok::<_, (StatusCode, String)>(Json(metrics))
 }
 
 /// `GET /` - dumps the result of `bad_input_likelihood`.

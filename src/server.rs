@@ -18,6 +18,9 @@ use crate::endpoints;
 use crate::metrics::{Metrics, SharedMetrics, update_metrics};
 use crate::packet::Packet;
 
+/// Size in MB for the UDP socket buffer
+const UDP_BUF_SIZE_MB: usize = 8;
+
 /// Builds a [`Router`] containing all the endpoints we'd like to enable.
 ///
 /// `store` is injected as Axum [`State`] so handlers can read the buffers.
@@ -41,18 +44,20 @@ fn router(state: SharedDataState, metrics: SharedMetrics) -> Router {
     router.merge(metrics_router)
 }
 
-/// Construct a UDP socket with a buffer large enough to handle
-/// burst events.
+/// Construct a UDP socket with a buffer large enough to handle burst events.
 async fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Error> {
     let socket = UdpSocket::bind(addr).await?;
 
     // Borrow the socket as a socket2 ref to increase buffer
     let sock_ref = socket2::SockRef::from(&socket);
-    sock_ref.set_recv_buffer_size(8 * 1024 * 1024)?; // 8MB
+    sock_ref.set_recv_buffer_size(UDP_BUF_SIZE_MB * 1024 * 1024)?;
 
     // log the actual recv buffer size
     let actual = sock_ref.recv_buffer_size()?;
-    tracing::debug!("Request 8MB recv buffer, got {}MB", actual / 1024 / 1024);
+    tracing::debug!(
+        "Request {UDP_BUF_SIZE_MB}MB recv buffer, got {}MB",
+        actual / 1024 / 1024
+    );
 
     tracing::info!("UDP socket listening on {addr}");
 
@@ -118,7 +123,7 @@ async fn packet_handler_task(
 /// Panics if either address cannot be bound.
 pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr) {
     let state: SharedDataState = Arc::new(DataState::default());
-    let metrics: SharedMetrics = Arc::new(Metrics::new());
+    let metrics: SharedMetrics = Arc::new(Metrics::default());
 
     // Construct the socket and start the packet handling task. If this becomes
     // a bottleneck, it could be run in multiple threads

@@ -53,11 +53,12 @@ async fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Error> {
     sock_ref.set_recv_buffer_size(UDP_BUF_SIZE_MB * 1024 * 1024)?;
 
     // log the actual recv buffer size
-    let actual = sock_ref.recv_buffer_size()?;
-    tracing::debug!(
-        "Request {UDP_BUF_SIZE_MB}MB recv buffer, got {}MB",
-        actual / 1024 / 1024
-    );
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "buffer size should never be large enough to cause precision loss"
+    )]
+    let actual = sock_ref.recv_buffer_size()? as f64 / 1024_f64 / 1024_f64;
+    tracing::debug!("Request {UDP_BUF_SIZE_MB}MB recv buffer, got {}MB", actual,);
 
     tracing::info!("UDP socket listening on {addr}");
 
@@ -84,7 +85,7 @@ async fn packet_handler_task(
         // Pass through the entire os buffer
         loop {
             match sock.try_recv_from(&mut buf) {
-                Ok((len, _)) => match Packet::parse(&buf[..len]) {
+                Ok((len, _)) => match Packet::parse(buf.get(..len).unwrap_or_default()) {
                     Ok(packet) => match state.push(packet) {
                         Ok(id) => {
                             if id != last_update_id {

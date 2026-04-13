@@ -13,7 +13,11 @@ const EXPECTED_VERSION: u16 = 2;
 
 /// Packet-specific `stream_id` type
 #[derive(BinRead, Debug, Default, Clone, Copy, PartialEq, Serialize)]
-#[allow(dead_code, non_camel_case_types)]
+#[allow(
+    dead_code,
+    non_camel_case_types,
+    reason = "mirrors the type defined in kotekan"
+)]
 pub struct stream_t {
     id: u64,
 }
@@ -23,7 +27,6 @@ pub struct stream_t {
 /// `#[derive(BinRead)]` with `#[br(little)]` instructs `binrw` to deserialize
 /// each field in order from a little-endian byte stream, eliminating manual
 /// offset arithmetic.
-#[allow(dead_code)] // The header is defined by the sender, even if we don't use everything
 #[derive(BinRead, Debug, Default, PartialEq, Clone, Copy, Serialize)]
 #[br(little)]
 pub struct Header {
@@ -53,7 +56,7 @@ pub struct Header {
 impl Header {
     /// Get a numeric ID value for this packet
     #[must_use]
-    pub fn id(&self) -> i64 {
+    pub const fn id(&self) -> i64 {
         self.seq_num
     }
 
@@ -62,7 +65,7 @@ impl Header {
     /// # Errors
     /// Errors if `self` and `other` are not equal for the
     /// expected fields
-    pub fn check_expected_equal(&self, other: &Header) -> Result<(), String> {
+    pub fn check_expected_equal(&self, other: &Self) -> Result<(), String> {
         // Clone *other* and update the members that we expect
         // could have changed
         let mut other_c = *other; // Header is Copy

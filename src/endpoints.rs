@@ -166,14 +166,22 @@ where
 {
     arr.map_axis(axis, |lane| {
         let mut v: Vec<f64> = lane.iter().map(|&x| f64::from(x)).collect();
-        let mid = v.len() / 2;
+        #[allow(
+            clippy::integer_division,
+            reason = "integer truncation is the desired behaviour"
+        )]
+        // Ensures there are at least 2 elements - if not, return early
+        let mid: usize = v.len() / 2;
+        if mid == 0 {
+            return 0_f64;
+        }
 
         v.select_nth_unstable_by(mid, f64::total_cmp);
-        let upper = v[mid];
+        let upper = *v.get(mid).unwrap_or(&0_f64);
 
         if v.len().is_multiple_of(2) {
             v.select_nth_unstable_by(mid - 1, f64::total_cmp);
-            f64::midpoint(v[mid - 1], upper)
+            f64::midpoint(*v.get(mid - 1).unwrap_or(&0_f64), upper)
         } else {
             upper
         }

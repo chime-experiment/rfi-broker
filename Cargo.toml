@@ -18,7 +18,7 @@ serde_json = "1"
 socket2 = "0.6.3"
 sunrise = "3.0.0"
 tokio = { version = "1", features = ["full"] }
-tracing = "0.1.44"
+tracing = { version = "0.1.44", features = ["release_max_level_info"] }
 tracing-journald = "0.3.2"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 

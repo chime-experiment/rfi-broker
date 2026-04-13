@@ -48,9 +48,13 @@ fn main() {
     tracing_subscriber::registry()
         // Default to `INFO` log level. Can be adjusted using RUST_LOG
         // environment variable
-        .with(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .with(tracing_journald::layer().ok()) // None is journald not available
-        .with(tracing_subscriber::fmt::layer()) // Fallback to print to stdout
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_thread_ids(true)
+                .with_line_number(true),
+        ) // Fallback to print to stdout with extra information
         .init();
 
     // Extract command-line options

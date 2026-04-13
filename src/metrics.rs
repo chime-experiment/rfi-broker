@@ -75,9 +75,9 @@ pub struct Metrics {
 /// Alias for shared metrics type
 pub type SharedMetrics = Arc<Metrics>;
 
-impl Metrics {
+impl Default for Metrics {
     /// Creates and registers all metrics into a [`Register`]
-    pub fn new() -> Self {
+    fn default() -> Self {
         let registry = Registry::new();
 
         let frac_flagged_prom = GaugeVec::new(
@@ -120,14 +120,15 @@ impl Metrics {
             rfi_zeroing: RFIZeroingTracker::default(),
         }
     }
+}
 
+impl Metrics {
     /// Render all metrics
-    pub fn serialize(&self) -> String {
+    pub fn serialize(&self) -> Result<String, prometheus::Error> {
         let encoder = TextEncoder::new();
         let metric_families = self.registry.gather();
-        encoder
-            .encode_to_string(&metric_families)
-            .unwrap_or_else(|e| format!("error encoding metrics: {e}\n"))
+
+        encoder.encode_to_string(&metric_families)
     }
 }
 

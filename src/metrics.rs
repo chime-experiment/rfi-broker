@@ -23,7 +23,10 @@ impl SampleLossTracker {
         self.lost.fetch_add(1, Ordering::Relaxed);
     }
 
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "expected value range is below value for truncation"
+    )]
     pub fn frac_lost(&self) -> f64 {
         let total = self.total.load(Ordering::Relaxed) as f64;
         let lost = self.lost.load(Ordering::Relaxed) as f64;

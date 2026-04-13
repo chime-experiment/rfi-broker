@@ -132,6 +132,10 @@ pub async fn solar_event_task(metrics: SharedMetrics) {
     let mut next_noon = solar_noon(coords, 0).unwrap();
 
     loop {
+        #[allow(
+            clippy::integer_division,
+            reason = "integer division downcasting is desired behaviour"
+        )]
         let next_event_start = next_noon.timestamp() - DOWNTIME_S / 2;
         let next_event_end = next_event_start + DOWNTIME_S;
 

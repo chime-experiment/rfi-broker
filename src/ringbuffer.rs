@@ -32,7 +32,7 @@ pub struct Frame<T> {
     /// Track how many slices of the array exist
     pub mask: Vec<bool>,
     /// Track how many samples have already been written
-    received_count: u64,
+    sample_count: u64,
     /// Track the axis over which this frame can be split
     axis: usize,
 }
@@ -41,54 +41,57 @@ impl<T> Frame<T>
 where
     T: Num + Clone,
 {
-    pub fn new(id: impl Into<u64>, shape: &[usize], axis: usize) -> Frame<T> {
-        Self {
+    fn new(id: impl Into<u64>, shape: &[usize], axis: usize) -> Option<Self> {
+        // Validate the incoming axis
+        let axlen = *shape.to_vec().get(axis)?;
+
+        Some(Self {
             id: id.into(),
             array: ArrayD::<T>::zeros(IxDyn(shape)),
-            mask: vec![false; shape.to_vec()[axis]],
-            received_count: 0,
+            mask: vec![false; axlen],
+            sample_count: 0,
             axis,
-        }
+        })
     }
 
-    pub fn insert(&mut self, indices: &[usize], chunk: &ArrayViewD<T>) -> Result<(), String> {
-        if self.is_full() {
-            return Err("tried to write to a frame that's already full!".into());
-        }
-
-        if indices.len() != chunk.shape()[self.axis] {
+    fn insert(&mut self, indices: &[usize], chunk: &ArrayViewD<T>) -> Result<u64, String> {
+        if chunk.shape().get(self.axis).is_none()
+            || indices.len() != *chunk.shape().get(self.axis).unwrap()
+        {
             return Err(format!(
-                "number of indices does not match chunk shape: {} != {}",
+                "number of indices does not match chunk shape on axis {}: {} != {:?}",
+                self.axis,
                 indices.len(),
-                chunk.shape()[self.axis]
+                chunk.shape(),
             ));
         }
         // Don't assume that indices are contiguous
         let axis = Axis(self.axis);
 
         for idx in indices {
-            if self.mask[*idx] {
+            // Check that the indices make sense, and that this sample
+            // hasn't already been received
+            let Some(m_sl) = self.mask.get_mut(*idx) else {
+                return Err(format!(
+                    "invalid index {idx} on axis {} for frame shape {:?}",
+                    self.axis,
+                    self.array.shape()
+                ));
+            };
+
+            if *m_sl {
                 return Err("tried to insert an index which has already been written".into());
             }
+            // Insert to the array and update the mask
             self.array
                 .index_axis_mut(axis, *idx)
                 .assign(&chunk.index_axis(axis, *idx));
             // Also record that these indices have been written
-            self.mask[*idx] = true;
-            self.received_count += 1;
+            *m_sl = true;
+            self.sample_count += 1;
         }
 
-        Ok(())
-    }
-
-    /// `true` if this frame has received all expected samples
-    pub fn is_full(&self) -> bool {
-        self.received_count == self.array.shape()[self.axis] as u64
-    }
-
-    /// Getter for the sample count
-    pub fn sample_count(&self) -> u64 {
-        self.received_count
+        Ok(self.sample_count)
     }
 }
 
@@ -161,7 +164,8 @@ where
                 ));
             }
             // Create a new frame and insert it
-            let new_frame: Frame<T> = Frame::new(key, &self.frame_shape, axis);
+            let new_frame: Frame<T> = Frame::new(key, &self.frame_shape, axis)
+                .ok_or(format!("axis {axis} is invalid for expected frame shape."))?;
             // Evict the oldest frame and push to the buffer if it seems to
             // have received a reasonable number of samples
             if guard.len() == PARTIAL_FRAME_CAPACITY {
@@ -173,7 +177,7 @@ where
                 // approach introduces a delay equivalent to the full timeout time in the case
                 // where a frame never becomes full.
                 if let Some(last_frame) = self.last()
-                    && frame.sample_count() >= last_frame.sample_count()
+                    && frame.sample_count >= last_frame.sample_count
                 {
                     self.lock_push(frame);
                 }
@@ -184,11 +188,11 @@ where
         let frame: &mut Frame<T> = guard.get_mut(&key).unwrap();
 
         // Push data to the frame
-        frame.insert(indices, &array.view())?;
+        let count: u64 = frame.insert(indices, &array.view())?;
 
         // Remove the frame from the partial map and push
         // to the ringbuffer
-        if frame.is_full() {
+        if count == *self.frame_shape.get(axis).unwrap_or(&0_usize) as u64 {
             let filled_frame: Frame<T> = guard.remove(&key).unwrap();
 
             self.lock_push(filled_frame);
@@ -235,12 +239,7 @@ where
         // `stack` requires views
         let views: Vec<_> = snapshot.iter().map(|f| f.array.view()).collect();
 
-        let axis = axis.into();
-
-        let ax = match axis {
-            Some(axis) => Axis(axis),
-            None => Axis(self.frame_shape.len()),
-        };
+        let ax = axis.into().map_or(Axis(self.frame_shape.len()), Axis);
 
         ndarray::stack(ax, &views).ok()
     }
@@ -250,7 +249,7 @@ where
         // Get a snapshot of the current buffer and release lock
         let snapshot: Vec<Frame<T>> = self.snapshot();
         // Sort out the shape
-        let nrows = snapshot[0].mask.len();
+        let nrows = self.last()?.mask.len();
         let ncols = snapshot.len();
         // Masks are 1-dimensional, so stack over the first axis
         let flat_vec: Vec<u8> = snapshot

@@ -22,7 +22,13 @@ tracing = { version = "0.1.44", features = ["release_max_level_info"] }
 tracing-journald = "0.3.2"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
+[dev-dependencies]
+tracing-test = "0.2.6"
+
 [profile.release]
 opt-level = 3
 codegen-units = 1
 lto = "thin"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }

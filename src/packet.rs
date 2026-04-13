@@ -52,11 +52,16 @@ pub struct Header {
 
 impl Header {
     /// Get a numeric ID value for this packet
+    #[must_use]
     pub fn id(&self) -> i64 {
         self.seq_num
     }
 
     /// Check that values which *shouldn't* change are equal
+    ///
+    /// # Errors
+    /// Errors if `self` and `other` are not equal for the
+    /// expected fields
     pub fn check_expected_equal(&self, other: &Header) -> Result<(), String> {
         // Clone *other* and update the members that we expect
         // could have changed
@@ -103,7 +108,10 @@ pub struct Packet {
 }
 
 impl Packet {
-    /// Parse from bytes
+    /// Parse from bytes.
+    ///
+    /// # Errors
+    /// Errors if the input buffer cannot be parsed.
     pub fn parse(buf: &[u8]) -> Result<Self, String> {
         let mut cursor = Cursor::new(&buf);
 

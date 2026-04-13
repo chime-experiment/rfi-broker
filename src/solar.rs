@@ -7,7 +7,7 @@ use sunrise::{Coordinates, SolarDay, SolarEvent};
 use tokio::time::{Instant, sleep_until};
 
 use reqwest::Client;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde_json::json;
 
 use crate::metrics::SharedMetrics;
@@ -114,20 +114,17 @@ pub async fn solar_event_task(metrics: SharedMetrics) {
     // Contruct headers
     let mut headers = HeaderMap::new();
     headers.insert(
-        HeaderName::from_static("content-type"),
-        HeaderValue::from_static("application/json"),
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=UTF-8"),
     );
-    headers.insert(
-        HeaderName::from_static("Accept-Charset"),
-        HeaderValue::from_static("UTF-8"),
-    );
+
     // Create a fixed coordinate object
     let coords: Coordinates = Coordinates::new(LATITUDE, LONGITUDE).unwrap();
 
     // One-time calculation of the next solar noon
     let mut noon_delta = solar_noon(coords, 0).unwrap().timestamp();
 
-    println!("Next solar noon in {noon_delta} seconds.");
+    tracing::debug!("Next solar noon in {noon_delta} seconds.");
 
     loop {
         let next_event_start = noon_delta - DOWNTIME_S / 2;
@@ -139,11 +136,11 @@ pub async fn solar_event_task(metrics: SharedMetrics) {
             // Send the second-stage event first
             match post_zeroing_event(&client, &headers, SECOND_STAGE_ENDPOINT, false).await {
                 Ok(()) => metrics.rfi_zeroing.set_second(false),
-                Err(e) => eprintln!("{e}"),
+                Err(e) => tracing::warn!("{e}"),
             }
             match post_zeroing_event(&client, &headers, FIRST_STAGE_ENDPOINT, false).await {
                 Ok(()) => metrics.rfi_zeroing.set_first(false),
-                Err(e) => eprintln!("{e}"),
+                Err(e) => tracing::warn!("{e}"),
             }
         }
 
@@ -153,19 +150,19 @@ pub async fn solar_event_task(metrics: SharedMetrics) {
             // Send the first-stage event first
             match post_zeroing_event(&client, &headers, FIRST_STAGE_ENDPOINT, true).await {
                 Ok(()) => metrics.rfi_zeroing.set_first(true),
-                Err(e) => eprintln!("{e}"),
+                Err(e) => tracing::warn!("{e}"),
             }
             match post_zeroing_event(&client, &headers, SECOND_STAGE_ENDPOINT, true).await {
                 Ok(()) => metrics.rfi_zeroing.set_second(true),
-                Err(e) => eprintln!("{e}"),
+                Err(e) => tracing::warn!("{e}"),
             }
         } else {
-            eprintln!("Solar post-noon event time has already passed. Skipping...");
+            tracing::debug!("Solar post-noon event time has already passed. Skipping...");
         }
 
         // Get the next solar noon window
         noon_delta = solar_noon(coords, 1).unwrap().timestamp();
 
-        println!("Next solar noon in {noon_delta} seconds.");
+        tracing::debug!("Next solar noon in {noon_delta} seconds.");
     }
 }

@@ -7,6 +7,7 @@
 use std::net::SocketAddr;
 
 use clap::Parser;
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod datastate;
 mod endpoints;
@@ -43,9 +44,18 @@ fn _default_nthreads() -> usize {
 
 /// Parses CLI, resolves config, and starts the server.
 fn main() {
+    // Set up logging
+    tracing_subscriber::registry()
+        // Default to `INFO` log level. Can be adjusted using RUST_LOG
+        // environment variable
+        .with(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
+        .with(tracing_journald::layer().ok()) // None is journald not available
+        .with(tracing_subscriber::fmt::layer()) // Fallback to print to stdout
+        .init();
+
     // Extract command-line options
     let cli = Cli::parse();
-    println!("Using {} worker threads", cli.threads);
+    tracing::debug!("Using {} worker threads", cli.threads);
 
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(cli.threads)

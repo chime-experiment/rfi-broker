@@ -11,7 +11,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{Router, routing::get};
-use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::{TcpListener, UdpSocket};
 
 use crate::datastate::{DataState, SharedDataState};
@@ -44,21 +43,20 @@ fn router(state: SharedDataState, metrics: SharedMetrics) -> Router {
 
 /// Construct a UDP socket with a buffer large enough to handle
 /// burst events.
-fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Error> {
-    // Construct a socket large enough to handle burst events
-    let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
-    socket.set_recv_buffer_size(8 * 1024 * 1024)?; // 8MB
+async fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Error> {
+    let socket = UdpSocket::bind(addr).await?;
+
+    // Borrow the socket as a socket2 ref to increase buffer
+    let sock_ref = socket2::SockRef::from(&socket);
+    sock_ref.set_recv_buffer_size(8 * 1024 * 1024)?; // 8MB
 
     // log the actual recv buffer size
-    let actual = socket.recv_buffer_size()?;
-    println!("Request 8MB recv buffer, got {}MB", actual / 1024 / 1024);
+    let actual = sock_ref.recv_buffer_size()?;
+    tracing::debug!("Request 8MB recv buffer, got {}MB", actual / 1024 / 1024);
 
-    socket.bind(&addr.into())?;
+    tracing::info!("UDP socket listening on {addr}");
 
-    // Convert to a `tokio` `UdpSocket`
-    let socket = std::net::UdpSocket::from(socket);
-
-    UdpSocket::from_std(socket)
+    Ok(socket)
 }
 
 /// Drains a UDP socket buffer and pushes packets to the [`DataState`].
@@ -91,12 +89,12 @@ async fn packet_handler_task(
                         }
                         Err(e) => {
                             metrics.packet_loss.inc_lost();
-                            eprintln!("Error pushing packet to state: {e}");
+                            tracing::debug!("Error pushing packet to state: {e}");
                         }
                     },
                     Err(e) => {
                         metrics.packet_loss.inc_lost();
-                        eprintln!("Error parsing packet: {e}");
+                        tracing::debug!("Error parsing packet: {e}");
                     }
                 },
                 Err(ref e) if e.kind() == WouldBlock => {
@@ -105,7 +103,7 @@ async fn packet_handler_task(
                 }
                 Err(e) => {
                     metrics.packet_loss.inc_lost();
-                    eprintln!("UDP recv error: {e}");
+                    tracing::debug!("UDP recv error: {e}");
                 }
             }
             metrics.packet_loss.inc_total();
@@ -125,6 +123,7 @@ pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr) {
     // Construct the socket and start the packet handling task. If this becomes
     // a bottleneck, it could be run in multiple threads
     let udp_sock = construct_sock(udp_addr)
+        .await
         .unwrap_or_else(|e| panic!("Failed to bind UDP listener on {udp_addr}: {e}"));
 
     let packet_handler = tokio::spawn(packet_handler_task(
@@ -141,11 +140,11 @@ pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr) {
         .unwrap_or_else(|e| panic!("Failed to bind HTTP listener on {http_addr}: {e}"));
 
     let http = tokio::spawn(axum::serve(listener, router(state, metrics)).into_future());
-    println!("HTTP listening on {http_addr}");
+    tracing::info!("HTTP listening on {http_addr}");
 
     tokio::select! {
-        _ = packet_handler => eprintln!("Packet handler exited unexpectedly"),
-        _ = http => eprintln!("HTTP server exited unexpectedly"),
-        _ = solar => eprintln!("Solar event task exited unexpectedly"),
+        _ = packet_handler => tracing::error!("Packet handler exited unexpectedly"),
+        _ = http => tracing::error!("HTTP server exited unexpectedly"),
+        _ = solar => tracing::error!("Solar event task exited unexpectedly"),
     }
 }

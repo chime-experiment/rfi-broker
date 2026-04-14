@@ -4,11 +4,11 @@
 //! multi-threaded tokio runtime, and runs the async server.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use clap::Parser;
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
-use rfi_receiver::server;
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Command-line parser
 #[derive(Parser)]
@@ -26,6 +26,10 @@ struct Cli {
     /// Number of worker threads
     #[arg(short, long, default_value_t = _default_nthreads())]
     pub threads: usize,
+
+    /// Config file
+    #[arg(short, long)]
+    pub config: PathBuf,
 }
 
 /// Returns the default number of work threads: the lesser of
@@ -52,6 +56,14 @@ fn main() {
 
     // Extract command-line options
     let cli = Cli::parse();
+
+    // Load the config
+    let Some(config_path) = cli.config.to_str() else {
+        panic!("invalid config file path");
+    };
+    let config = rfi_receiver::config::load(config_path)
+        .unwrap_or_else(|e| panic!("unable to load config file: {e}"));
+
     tracing::debug!("Using {} worker threads", cli.threads);
 
     tokio::runtime::Builder::new_multi_thread()
@@ -59,5 +71,5 @@ fn main() {
         .enable_all()
         .build()
         .unwrap()
-        .block_on(server::serve(cli.addr, cli.udp_addr));
+        .block_on(rfi_receiver::server::serve(cli.addr, cli.udp_addr, config));
 }

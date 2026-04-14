@@ -5,7 +5,6 @@
 //! - ``data``: Dump all ringbuffers
 //! - ``bad_input_likelihood``: per-input likelihood of a feed being corrupted
 
-use std::future::IntoFuture;
 use std::io::ErrorKind::WouldBlock;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -13,6 +12,7 @@ use std::sync::Arc;
 use axum::{Router, routing::get};
 use tokio::net::{TcpListener, UdpSocket};
 
+use crate::config::AppConfig;
 use crate::datastate::{DataState, SharedDataState};
 use crate::endpoints;
 use crate::metrics::{Metrics, SharedMetrics, update_metrics};
@@ -122,9 +122,10 @@ async fn packet_handler_task(
 ///
 /// # Panics
 /// Panics if either address cannot be bound.
-pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr) {
+pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr, config: AppConfig) {
     let state: SharedDataState = Arc::new(DataState::default());
     let metrics: SharedMetrics = Arc::new(Metrics::default());
+    let config: Arc<AppConfig> = Arc::new(config);
 
     // Construct the socket and start the packet handling task. If this becomes
     // a bottleneck, it could be run in multiple threads
@@ -139,7 +140,10 @@ pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr) {
     ));
 
     // Start the solar event task
-    let solar = tokio::spawn(crate::solar::solar_event_task(Arc::clone(&metrics)));
+    let solar = tokio::spawn(crate::solar::solar_event_task(
+        Arc::clone(&metrics),
+        Arc::clone(&config),
+    ));
 
     let listener = TcpListener::bind(http_addr)
         .await

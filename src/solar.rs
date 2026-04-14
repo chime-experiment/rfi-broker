@@ -8,22 +8,11 @@ use tokio::time::{Instant, sleep_until};
 
 use reqwest::Client;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
+
 use serde_json::json;
 
+use crate::config::SharedAppConfig;
 use crate::metrics::SharedMetrics;
-
-/// # Configuration
-// NB: these values are hard-coded for CHIME. They should be moved to
-// a configuration file somehow.
-const LATITUDE: f64 = 49.320_709_219_4;
-const LONGITUDE: f64 = -119.623_677_431_0;
-const ALTITUDE: f64 = 555.372;
-
-const DOWNTIME_S: i64 = 3600; // 1 hour
-
-const FIRST_STAGE_ENDPOINT: &str = "http://csBfs:54323/rfi-zeroing-toggle-first-stage";
-const SECOND_STAGE_ENDPOINT: &str = "http://csBfs:54323/rfi-zeroing-toggle-second-stage";
-const TARGET: &str = "rfi-zeroing";
 
 /// Convert a Unix timestamp to a [`tokio::time::Instant`].
 ///
@@ -47,7 +36,7 @@ fn unix_to_instant(unix_time: i64) -> Option<Instant> {
 }
 
 /// Compute solar noon for `days_offset` days from today
-fn solar_noon(coord: Coordinates, days_offset: i64) -> Option<DateTime<Utc>> {
+fn solar_noon(coord: Coordinates, altitude: f64, days_offset: i64) -> Option<DateTime<Utc>> {
     let mut requested_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()?
@@ -59,7 +48,7 @@ fn solar_noon(coord: Coordinates, days_offset: i64) -> Option<DateTime<Utc>> {
     // Sort out the sunrise, sunset, and noon
     let date = DateTime::<Utc>::from_timestamp(requested_time, 0)?.date_naive();
 
-    let day = SolarDay::new(coord, date).with_altitude(ALTITUDE);
+    let day = SolarDay::new(coord, date).with_altitude(altitude);
 
     let rise = day.event_time(SolarEvent::Sunrise)?.timestamp();
     let set = day.event_time(SolarEvent::Sunset)?.timestamp();
@@ -114,7 +103,22 @@ async fn post_event(
 ///
 /// # Panics
 /// Panics if the solar noon estimation fails.
-pub async fn solar_event_task(metrics: SharedMetrics) {
+pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) {
+    tracing::debug!(
+        "Running solar task for telescope\n{:#?} with endpoint parameters\n{:#?}",
+        config.telescope,
+        config.zeroing
+    );
+    // Construct the addresses only once
+    let first_stage_addr = format!(
+        "https://{}/{}",
+        &config.zeroing.hostname, &config.zeroing.first_stage
+    );
+    let second_stage_addr = format!(
+        "https://{}/{}",
+        &config.zeroing.hostname, &config.zeroing.second_stage
+    );
+
     // Create a new requests client
     let client = Client::new();
     // Contruct headers
@@ -125,19 +129,20 @@ pub async fn solar_event_task(metrics: SharedMetrics) {
     );
 
     // Create a fixed coordinate object
-    let coords: Coordinates = Coordinates::new(LATITUDE, LONGITUDE).unwrap();
+    let coords: Coordinates =
+        Coordinates::new(config.telescope.latitude, config.telescope.longitude).unwrap();
 
     // One-time calculation of the next solar noon
     // TODO: handle errors here
-    let mut next_noon = solar_noon(coords, 0).unwrap();
+    let mut next_noon = solar_noon(coords, config.telescope.altitude, 0).unwrap();
 
     loop {
         #[allow(
             clippy::integer_division,
             reason = "integer division downcasting is desired behaviour"
         )]
-        let next_event_start = next_noon.timestamp() - DOWNTIME_S / 2;
-        let next_event_end = next_event_start + DOWNTIME_S;
+        let next_event_start = next_noon.timestamp() - config.zeroing.downtime.cast_signed() / 2;
+        let next_event_end = next_event_start + config.zeroing.downtime.cast_signed();
 
         tracing::info!("Next solar noon window at {next_noon}");
 
@@ -145,11 +150,27 @@ pub async fn solar_event_task(metrics: SharedMetrics) {
         if let Some(t) = unix_to_instant(next_event_start) {
             sleep_until(t).await;
             // Send the second-stage event first
-            match post_event(&client, &headers, SECOND_STAGE_ENDPOINT, TARGET, false).await {
+            match post_event(
+                &client,
+                &headers,
+                &second_stage_addr,
+                &config.zeroing.target,
+                false,
+            )
+            .await
+            {
                 Ok(()) => metrics.rfi_zeroing.set_second(false),
                 Err(e) => tracing::warn!("{e}"),
             }
-            match post_event(&client, &headers, FIRST_STAGE_ENDPOINT, TARGET, true).await {
+            match post_event(
+                &client,
+                &headers,
+                &first_stage_addr,
+                &config.zeroing.target,
+                true,
+            )
+            .await
+            {
                 Ok(()) => metrics.rfi_zeroing.set_first(false),
                 Err(e) => tracing::warn!("{e}"),
             }
@@ -159,11 +180,27 @@ pub async fn solar_event_task(metrics: SharedMetrics) {
         if let Some(t) = unix_to_instant(next_event_end) {
             sleep_until(t).await;
             // Send the first-stage event first
-            match post_event(&client, &headers, FIRST_STAGE_ENDPOINT, TARGET, true).await {
+            match post_event(
+                &client,
+                &headers,
+                &first_stage_addr,
+                &config.zeroing.target,
+                true,
+            )
+            .await
+            {
                 Ok(()) => metrics.rfi_zeroing.set_first(true),
                 Err(e) => tracing::warn!("{e}"),
             }
-            match post_event(&client, &headers, SECOND_STAGE_ENDPOINT, TARGET, true).await {
+            match post_event(
+                &client,
+                &headers,
+                &second_stage_addr,
+                &config.zeroing.target,
+                true,
+            )
+            .await
+            {
                 Ok(()) => metrics.rfi_zeroing.set_second(true),
                 Err(e) => tracing::warn!("{e}"),
             }
@@ -172,6 +209,6 @@ pub async fn solar_event_task(metrics: SharedMetrics) {
         }
 
         // Get the next solar noon window
-        next_noon = solar_noon(coords, 1).unwrap();
+        next_noon = solar_noon(coords, config.telescope.altitude, 1).unwrap();
     }
 }

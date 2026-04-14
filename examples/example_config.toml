@@ -1,0 +1,11 @@
+[telescope]
+latitude = 49.320_709_219_4
+longitude = -119.623_677_431_0
+altitude = 555.372
+
+[zeroing]
+downtime = 3600 # seconds
+hostname = "csBfs:54323"
+target = "rfi-zeroing"
+first_stage = "rfi-zeroing-toggle-first-stage"
+second_stage = "rfi-zeroing-toggle-second-stage"

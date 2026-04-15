@@ -135,9 +135,9 @@ fn compute_bad_input_likelihood(state: &SharedDataState) -> Result<ArrayD<f64>, 
     let mut median: ArrayD<f64> = median_axis(&mean_val.view(), Axis(0));
 
     // Convert to a percentage and normalize by the number of frames per packet
+    let meta = state.metadata.get().ok_or("metadata is not accessible")?;
     // NB: this is what was done before, but unclear as to why
-    // #[allow(clippy::cast_precision_loss)]
-    let norm = 100.0 / f64::from(state.metadata.get().unwrap().lock().frames_per_packet);
+    let norm = 100.0 / f64::from(meta.lock().frames_per_packet);
     median *= norm;
 
     Ok(median)

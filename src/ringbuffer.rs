@@ -55,8 +55,10 @@ where
     }
 
     fn insert(&mut self, indices: &[usize], chunk: &ArrayViewD<T>) -> Result<u64, String> {
-        if chunk.shape().get(self.axis).is_none()
-            || indices.len() != *chunk.shape().get(self.axis).unwrap()
+        if chunk
+            .shape()
+            .get(self.axis)
+            .is_none_or(|x| *x != indices.len())
         {
             return Err(format!(
                 "number of indices does not match chunk shape on axis {}: {} != {:?}",
@@ -169,6 +171,10 @@ where
             // Evict the oldest frame and push to the buffer if it seems to
             // have received a reasonable number of samples
             if guard.len() == PARTIAL_FRAME_CAPACITY {
+                #[allow(
+                    clippy::unwrap_used,
+                    reason = "guarded map is guaranteed to have at least one item"
+                )]
                 let (_, frame) = guard.pop_first().unwrap();
                 // NB: this isn't a great way to do this (should maybe have some sort
                 // of rolling average or something), but it ensures that only frames that
@@ -185,17 +191,23 @@ where
             guard.insert(key, new_frame);
         }
 
-        let frame: &mut Frame<T> = guard.get_mut(&key).unwrap();
+        #[allow(
+            clippy::unwrap_used,
+            reason = "guarded map is guaranteed to contain the key due to earlier check"
+        )]
+        {
+            let frame: &mut Frame<T> = guard.get_mut(&key).unwrap();
 
-        // Push data to the frame
-        let count: u64 = frame.insert(indices, &array.view())?;
+            // Push data to the frame
+            let count: u64 = frame.insert(indices, &array.view())?;
 
-        // Remove the frame from the partial map and push
-        // to the ringbuffer
-        if count == *self.frame_shape.get(axis).unwrap_or(&0_usize) as u64 {
-            let filled_frame: Frame<T> = guard.remove(&key).unwrap();
+            // Remove the frame from the partial map and push
+            // to the ringbuffer
+            if count == *self.frame_shape.get(axis).unwrap_or(&0_usize) as u64 {
+                let filled_frame: Frame<T> = guard.remove(&key).unwrap();
 
-            self.lock_push(filled_frame);
+                self.lock_push(filled_frame);
+            }
         }
 
         Ok(key)

@@ -40,6 +40,11 @@ fn _default_nthreads() -> usize {
 }
 
 /// Parses CLI, resolves config, and starts the server.
+#[allow(
+    clippy::panic,
+    clippy::unwrap_used,
+    reason = "panic is desired behaviour for startup failures"
+)]
 fn main() {
     // Set up logging
     tracing_subscriber::registry()

@@ -88,6 +88,7 @@ async fn packet_handler_task(
                 Ok((len, _)) => match Packet::parse(buf.get(..len).unwrap_or_default()) {
                     Ok(packet) => match state.push(packet) {
                         Ok(id) => {
+                            metrics.packet_loss.inc_recv();
                             if id != last_update_id {
                                 last_update_id = id;
                                 update_metrics(&metrics, &state);
@@ -112,7 +113,6 @@ async fn packet_handler_task(
                     tracing::debug!("UDP recv error: {e}");
                 }
             }
-            metrics.packet_loss.inc_total();
         }
     }
 }

@@ -15,11 +15,13 @@ pub struct SampleLossTracker {
 }
 
 impl SampleLossTracker {
-    pub fn inc_total(&self) {
+    pub fn inc_recv(&self) {
         self.total.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn inc_lost(&self) {
+        // Increment both counters
+        self.total.fetch_add(1, Ordering::Relaxed);
         self.lost.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -180,4 +182,31 @@ pub fn update_metrics(metrics: &SharedMetrics, state: &SharedDataState) {
     metrics
         .packet_loss_prom
         .set(metrics.packet_loss.frac_lost());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sample_loss() {
+        let tracker = SampleLossTracker::default();
+
+        for _ in 0..8 {
+            tracker.inc_recv();
+        }
+
+        for _ in 0..2 {
+            tracker.inc_lost();
+        }
+
+        let frac = tracker.frac_lost();
+
+        // Check that the fraction is lost is as expected,
+        // within a tolerance
+        assert!(
+            (frac - 0.2).abs() < 1.0e-6,
+            "`frac_lost`={frac} is not within tolerance `1.0e-6` of expectation=`0.2`"
+        );
+    }
 }

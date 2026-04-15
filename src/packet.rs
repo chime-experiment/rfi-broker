@@ -4,7 +4,7 @@
 // https://github.com/kotekan/kotekan/blob/chord/lib/utils/rfi_functions.h#L14
 use std::io::Cursor;
 
-use binrw::BinRead;
+use binrw::{BinRead, BinWrite};
 use serde::Serialize;
 
 /// The protocol version to accept. Packets with any other version number
@@ -12,7 +12,8 @@ use serde::Serialize;
 const EXPECTED_VERSION: u16 = 2;
 
 /// Packet-specific `stream_id` type
-#[derive(BinRead, Debug, Default, Clone, Copy, PartialEq, Serialize)]
+#[derive(BinRead, BinWrite, Debug, Default, Clone, Copy, PartialEq, Serialize)]
+#[brw(little)]
 #[allow(
     dead_code,
     non_camel_case_types,
@@ -27,8 +28,8 @@ pub struct stream_t {
 /// `#[derive(BinRead)]` with `#[br(little)]` instructs `binrw` to deserialize
 /// each field in order from a little-endian byte stream, eliminating manual
 /// offset arithmetic.
-#[derive(BinRead, Debug, Default, PartialEq, Clone, Copy, Serialize)]
-#[br(little)]
+#[derive(BinRead, BinWrite, Debug, Default, PartialEq, Clone, Copy, Serialize)]
+#[brw(little)]
 pub struct Header {
     /// Protocol version number - must equal [`EXPECTED_VERSION`]
     #[br(assert(version == EXPECTED_VERSION, "unexpected version {}", version))]
@@ -82,8 +83,9 @@ impl Header {
 }
 
 /// Description of packet payload contents.
-#[derive(Debug, BinRead)]
+#[derive(BinRead, BinWrite, Debug, PartialEq)]
 #[br(little, import { hdr: &Header })]
+#[bw(little)]
 pub struct Body {
     /// List of frequencies contained in this packet
     #[br(count = hdr.num_local_freq)]
@@ -100,8 +102,8 @@ pub struct Body {
 }
 
 /// Entire packet
-#[derive(BinRead, Debug)]
-#[br(little)]
+#[derive(BinRead, BinWrite, Debug, PartialEq)]
+#[brw(little)]
 pub struct Packet {
     /// packet header
     pub header: Header,
@@ -119,5 +121,56 @@ impl Packet {
         let mut cursor = Cursor::new(&buf);
 
         Self::read_le(&mut cursor).map_err(|e| format!("Error parsing packet: {e}"))
+    }
+
+    /// Write to bytes
+    ///
+    /// # Errors
+    /// Errors if writing fails
+    pub fn to_vec(&self) -> Result<Vec<u8>, String> {
+        let mut cursor = Cursor::new(Vec::new());
+
+        self.write_le(&mut cursor)
+            .map_err(|e| format!("failed to write to bytes: {e}"))?;
+
+        Ok(cursor.into_inner())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bin_roundtrip() {
+        let header = Header {
+            version: 2_u16,
+            payload_length: 26_u32,
+            sk_step: 8_u32,
+            num_elements: 10_u32,
+            samples_per_data_set: 32_u32,
+            num_total_freq: 4_u32,
+            num_local_freq: 2_u32,
+            frames_per_packet: 2_u32,
+            seq_num: 0_i64,
+            stream_id: stream_t { id: 101_u64 },
+        };
+
+        let body = Body {
+            freq_ids: vec![0, 1],
+            frac_flagged: vec![0.2, 0.7],
+            sktilde_avg: vec![1.3, 1.1],
+            bad_feed_counts: vec![0u8; 20],
+        };
+
+        let packet = Packet { header, body };
+
+        let bin = packet.to_vec().unwrap();
+        let parsed = Packet::parse(&bin).unwrap();
+
+        // NB: this shouldn't fail, but one possible reason would
+        // be floating point error. Consider `approx` crate and
+        // `assert_relative_eq!` if this is an issue.
+        assert_eq!(packet, parsed);
     }
 }

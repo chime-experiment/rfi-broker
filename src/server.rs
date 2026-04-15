@@ -144,7 +144,7 @@ pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr, config: AppConfi
     ));
 
     // Start the solar event task
-    let solar = tokio::spawn(crate::solar::solar_event_task(
+    let solar = tokio::spawn(crate::events::solar_event_task(
         Arc::clone(&metrics),
         Arc::clone(&config),
     ));

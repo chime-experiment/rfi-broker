@@ -61,7 +61,9 @@ impl DataState {
             .push_vec(body.bad_feed_counts, id, &indices, axis)?;
 
         // Update the metadata since we got here
-        *self.metadata.get().unwrap().lock() = header;
+        #[allow(clippy::unwrap_used, reason = "metadata guaranteed to exist")]
+        let meta = self.metadata.get().unwrap();
+        *meta.lock() = header;
 
         Ok(id)
     }

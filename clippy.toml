@@ -1,0 +1,2 @@
+# Clippy config
+allow-unwrap-in-tests = true

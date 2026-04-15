@@ -129,11 +129,12 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) {
     );
 
     // Create a fixed coordinate object
+    #[allow(clippy::unwrap_used, reason = "panic on fail is desired behaviour")]
     let coords: Coordinates =
         Coordinates::new(config.telescope.latitude, config.telescope.longitude).unwrap();
 
     // One-time calculation of the next solar noon
-    // TODO: handle errors here
+    #[allow(clippy::unwrap_used, reason = "panic on fail is desired behaviour")]
     let mut next_noon = solar_noon(coords, config.telescope.altitude, 0).unwrap();
 
     loop {
@@ -208,7 +209,10 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) {
             tracing::debug!("Solar post-noon event time has already passed. Skipping...");
         }
 
-        // Get the next solar noon window
-        next_noon = solar_noon(coords, config.telescope.altitude, 1).unwrap();
+        // Get the next solar noon window. Have to use this extra variable assignment
+        // because rust doesn't let us use attributes on expressions
+        #[allow(clippy::unwrap_used, reason = "panic on fail is desired behaviour")]
+        let try_next_noon = solar_noon(coords, config.telescope.altitude, 1).unwrap();
+        next_noon = try_next_noon;
     }
 }

@@ -122,6 +122,10 @@ async fn packet_handler_task(
 ///
 /// # Panics
 /// Panics if either address cannot be bound.
+#[allow(
+    clippy::panic,
+    reason = "panic is desired behaviour for startup failures"
+)]
 pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr, config: AppConfig) {
     let state: SharedDataState = Arc::new(DataState::default());
     let metrics: SharedMetrics = Arc::new(Metrics::default());

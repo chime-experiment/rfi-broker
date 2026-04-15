@@ -30,7 +30,6 @@ tracing-test = "0.2.6"
 opt-level = 3
 codegen-units = 1
 lto = "fat"
-panic = "abort"
 
 [lints.clippy]
 # Enable all pedantic warnings
@@ -38,7 +37,9 @@ pedantic = { level = "warn", priority = -1 }
 
 # Enable specific selection from `restriction`
 # Unfinished code and style
-expect_used      = "warn"
+expect_used      = "deny"
+unwrap_used      = "deny"
+panic            = "deny"
 todo             = "warn"
 unimplemented    = "warn"
 # Code safety

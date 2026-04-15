@@ -80,6 +80,7 @@ pub type SharedMetrics = Arc<Metrics>;
 
 impl Default for Metrics {
     /// Creates and registers all metrics into a [`Register`]
+    #[allow(clippy::unwrap_used, reason = "unwrap is guaranteed to succeed")]
     fn default() -> Self {
         let registry = Registry::new();
 
@@ -143,9 +144,11 @@ impl Metrics {
 /// called from an async function run using ``tokio::spawn``.
 pub fn update_metrics(metrics: &SharedMetrics, state: &SharedDataState) {
     // Use just the most recent frame
-    if let Some(frac_flagged) = state.frac_flagged.get().unwrap().last() {
+    if let Some(frac_flagged) = state.frac_flagged.get()
+        && let Some(frame) = frac_flagged.last()
+    {
         // Iterate frequencies and update for each
-        for (label, val) in frac_flagged
+        for (label, val) in frame
             .array
             .iter()
             .enumerate()
@@ -158,8 +161,10 @@ pub fn update_metrics(metrics: &SharedMetrics, state: &SharedDataState) {
         }
     }
 
-    if let Some(sktilde) = state.sktilde_avg.get().unwrap().last() {
-        for (label, val) in sktilde
+    if let Some(sktilde) = state.sktilde_avg.get()
+        && let Some(frame) = sktilde.last()
+    {
+        for (label, val) in frame
             .array
             .iter()
             .enumerate()

@@ -68,3 +68,58 @@ impl DataState {
         Ok(id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_fixtures;
+
+    #[test]
+    fn test_push_packets() -> Result<(), Box<dyn std::error::Error>> {
+        let state = DataState::default();
+
+        // Produce and push a couple of packets
+        #[allow(
+            unused,
+            reason = "want to access final value of variable mutated in loop"
+        )]
+        let mut packet = crate::packet::Packet::default();
+
+        // Just push single chunks for now. Packet fixture uses
+        for chunk in 0..2 {
+            packet = test_fixtures::packet(vec![chunk]);
+            state.push(packet.clone())?;
+        }
+
+        // There should now be some data in the various buffers
+        assert!(state.metadata.get().is_some());
+        assert!(state.frac_flagged.get().is_some());
+        assert!(state.sktilde_avg.get().is_some());
+        assert!(state.bad_feed_counts.get().is_some());
+
+        // Check that the metadata is what we expect
+        let meta = state.metadata.get().ok_or("error getting metadata")?;
+        meta.lock().check_expected_equal(&packet.header)?;
+
+        // Check that each buffer has expected shape
+        let frac_flagged = state
+            .frac_flagged
+            .get()
+            .ok_or("error getting `frac_flagged`")?;
+        assert_eq!(frac_flagged.len(), 1);
+
+        let sktilde_avg = state
+            .sktilde_avg
+            .get()
+            .ok_or("error getting `sktilde_avg`")?;
+        assert_eq!(sktilde_avg.len(), 1);
+
+        let bad_feed_counts = state
+            .bad_feed_counts
+            .get()
+            .ok_or("error getting `bad_feed_counts`")?;
+        assert_eq!(bad_feed_counts.len(), 1);
+
+        Ok(())
+    }
+}

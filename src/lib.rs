@@ -10,3 +10,6 @@ pub(crate) mod ringbuffer;
 pub mod config;
 pub mod packet;
 pub mod server;
+
+#[cfg(test)]
+pub(crate) mod test_fixtures;

@@ -70,7 +70,7 @@ where
         // Don't assume that indices are contiguous
         let axis = Axis(self.axis);
 
-        for idx in indices {
+        for (ii, idx) in indices.iter().enumerate() {
             // Check that the indices make sense, and that this sample
             // hasn't already been received
             let Some(m_sl) = self.mask.get_mut(*idx) else {
@@ -87,7 +87,7 @@ where
             // Insert to the array and update the mask
             self.array
                 .index_axis_mut(axis, *idx)
-                .assign(&chunk.index_axis(axis, *idx));
+                .assign(&chunk.index_axis(axis, ii));
             // Also record that these indices have been written
             *m_sl = true;
             self.sample_count += 1;
@@ -143,7 +143,7 @@ where
     /// received.
     ///
     /// Assumes that frame `id`s are monotonically increasing.
-    pub fn push_array(
+    fn push_array(
         &self,
         array: &ArrayD<T>,
         id: impl Into<u64>,
@@ -223,7 +223,17 @@ where
         indices: &[usize],
         axis: usize,
     ) -> Result<u64, String> {
-        let arr: ArrayD<T> = ArrayD::from_shape_vec(self.frame_shape.clone(), vec)
+        // Sort out the shape of this chunk
+        let mut shape = self.frame_shape.clone();
+        let ax_shape = shape.get_mut(axis).ok_or_else(|| {
+            format!(
+                "Axis `{axis}` is out of bounds for shape {:?}",
+                self.frame_shape
+            )
+        })?;
+        *ax_shape = indices.len();
+
+        let arr = ArrayD::from_shape_vec(shape, vec)
             .map_err(|e| format!("Failed to construct array from vec: {e}"))?;
 
         self.push_array(&arr, id, indices, axis)
@@ -239,6 +249,11 @@ where
     /// Return a copy of the most recent frame
     pub fn last(&self) -> Option<Frame<T>> {
         self.frames.lock().back().cloned()
+    }
+
+    /// Get the length, or number of frames in the buffer
+    pub fn len(&self) -> usize {
+        self.frames.lock().len()
     }
 
     /// Return an `N+1` dimensional [`ArrayD`] stacked over an axis, or `None`
@@ -285,5 +300,40 @@ where
             .into_iter()
             .map(|f| serde_json::to_value(&f))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[allow(
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "casts on small positive integers"
+    )]
+    #[test]
+    fn test_push_vec() -> Result<(), Box<dyn std::error::Error>> {
+        let frame_shape = vec![3, 12];
+        // Create a new empty buffer
+        let buf = RingBuffer::<f32>::new(frame_shape);
+        // Expected array which will be pushed to the buffer in chunks
+        let expected_arr = ArrayD::<f32>::from_shape_fn(IxDyn(&[3, 12]), |idx| idx[0] as f32);
+
+        for (i, row_view) in expected_arr.axis_iter(Axis(0)).enumerate() {
+            // There shouldn't be anything in the buffer yet
+            assert_eq!(buf.len(), 0);
+            let chunk: Vec<f32> = row_view.iter().copied().collect();
+            buf.push_vec(chunk, 0_u64, &[i], 0)?;
+        }
+        // After the last push, there should now be a frame
+        // in the buffer
+        assert_eq!(buf.len(), 1);
+
+        // Make sure that the input values are as-expected
+        let frame = buf.last().unwrap().array;
+        assert_eq!(frame, expected_arr);
+
+        Ok(())
     }
 }

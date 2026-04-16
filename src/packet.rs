@@ -20,7 +20,7 @@ const EXPECTED_VERSION: u16 = 2;
     reason = "mirrors the type defined in kotekan"
 )]
 pub struct stream_t {
-    id: u64,
+    pub id: u64,
 }
 
 /// Decoded header from a UDP datagram.
@@ -83,7 +83,7 @@ impl Header {
 }
 
 /// Description of packet payload contents.
-#[derive(BinRead, BinWrite, Debug, PartialEq)]
+#[derive(BinRead, BinWrite, Clone, Default, Debug, PartialEq)]
 #[br(little, import { hdr: &Header })]
 #[bw(little)]
 pub struct Body {
@@ -102,7 +102,7 @@ pub struct Body {
 }
 
 /// Entire packet
-#[derive(BinRead, BinWrite, Debug, PartialEq)]
+#[derive(BinRead, BinWrite, Clone, Debug, Default, PartialEq)]
 #[brw(little)]
 pub struct Packet {
     /// packet header
@@ -140,30 +140,11 @@ impl Packet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_fixtures;
 
     #[test]
     fn test_bin_roundtrip() {
-        let header = Header {
-            version: 2_u16,
-            payload_length: 26_u32,
-            sk_step: 8_u32,
-            num_elements: 10_u32,
-            samples_per_data_set: 32_u32,
-            num_total_freq: 4_u32,
-            num_local_freq: 2_u32,
-            frames_per_packet: 2_u32,
-            seq_num: 0_i64,
-            stream_id: stream_t { id: 101_u64 },
-        };
-
-        let body = Body {
-            freq_ids: vec![0, 1],
-            frac_flagged: vec![0.2, 0.7],
-            sktilde_avg: vec![1.3, 1.1],
-            bad_feed_counts: vec![0u8; 20],
-        };
-
-        let packet = Packet { header, body };
+        let packet = test_fixtures::packet(vec![0_u32, 1]);
 
         let bin = packet.to_vec().unwrap();
         let parsed = Packet::parse(&bin).unwrap();

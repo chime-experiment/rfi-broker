@@ -23,13 +23,13 @@ struct Cli {
     #[arg(short, long)]
     pub udp_addr: SocketAddr,
 
-    /// Number of worker threads
-    #[arg(short, long, default_value_t = _default_nthreads())]
-    pub threads: usize,
-
     /// Config file
     #[arg(short, long)]
     pub config: PathBuf,
+
+    /// Number of worker threads
+    #[arg(short, long, default_value_t = _default_nthreads())]
+    pub threads: usize,
 }
 
 /// Returns the default number of work threads: the lesser of

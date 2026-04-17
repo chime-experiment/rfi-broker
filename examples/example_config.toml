@@ -1,8 +1,10 @@
+# Configures telescope coordinates used in solar transit calculations
 [telescope]
 latitude = 49.320_709_219_4
 longitude = -119.623_677_431_0
 altitude = 555.372
 
+# Specifies solar zeroing system interactions
 [zeroing]
 downtime = 3600 # seconds
 hostname = "csBfs:54323"

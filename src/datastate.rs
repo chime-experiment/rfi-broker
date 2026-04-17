@@ -2,6 +2,12 @@
 //!
 //! Each buffer is independently typed and locked, so reads on one dataset
 //! never block reads or writes on another.
+//!
+//! This is an application-specific state, and not meant to be used as part
+//! of a library. It interfaces directly with [`crate::packet::Packet`].
+//!
+//! Designed to be wrapped in a [`std::sync::Arc`] for easy use with
+//! `axum` and `tokio`.
 
 use std::sync::{Arc, OnceLock};
 
@@ -10,7 +16,10 @@ use parking_lot::Mutex;
 use crate::packet::{Body, Header, Packet};
 use crate::ringbuffer::RingBuffer;
 
-/// Hold an arbitrary number of `[TypedBuffer]`s.
+/// Shared state for application data.
+///
+/// Datasets are application specific, and matches those expected
+/// in [`crate::packet::Packet`].
 #[derive(Default, Debug)]
 pub struct DataState {
     /// Fixed instance of the packet header, whose values should
@@ -28,11 +37,10 @@ pub type SharedDataState = Arc<DataState>;
 impl DataState {
     /// Push a packet to the state, initializing on first push.
     pub fn push(&self, packet: Packet) -> Result<u64, String> {
-        // Push to each ringbuffer
         let body: Body = packet.body;
         let header: Header = packet.header;
 
-        // Check that the metadata is as-expected
+        // Check that the metadata is as-expected and initialize otherwise
         self.metadata
             .get_or_init(|| Mutex::new(header))
             .lock()
@@ -43,6 +51,7 @@ impl DataState {
         let id = header.id().cast_unsigned();
         let axis: usize = 0;
 
+        // Push to each ringbuffer, initializing if this is the first push
         self.frac_flagged
             .get_or_init(|| RingBuffer::<f32>::new(vec![header.num_local_freq as usize]))
             .push_vec(body.frac_flagged, id, &indices, axis)?;
@@ -74,6 +83,8 @@ mod tests {
     use super::*;
     use crate::test_fixtures;
 
+    /// Test that packets are successfully parsed and pushed into
+    /// the corresponding [`RingBuffer`]s.
     #[test]
     fn test_push_packets() -> Result<(), Box<dyn std::error::Error>> {
         let state = DataState::default();

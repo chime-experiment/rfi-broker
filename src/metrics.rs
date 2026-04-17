@@ -1,4 +1,4 @@
-//! Prometheus metrics.
+//! Application metrics state, including internal and Prometheus metrics.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -7,7 +7,9 @@ use prometheus::{Gauge, GaugeVec, Opts, Registry, TextEncoder};
 
 use crate::datastate::SharedDataState;
 
-/// Tracker for a sample loss count/fraction
+/// Tracker for a sample loss count/fraction.
+// NB: it would be good for this to be a rolling metric
+// or something, instead of looking at the entire duration.
 #[derive(Default)]
 pub struct SampleLossTracker {
     total: Arc<AtomicU64>,
@@ -15,13 +17,17 @@ pub struct SampleLossTracker {
 }
 
 impl SampleLossTracker {
+    /// Record a received sample.
     pub fn inc_recv(&self) {
         self.total.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Record a lost sample.
+    ///
+    /// Increments the total number of samples internally.
     pub fn inc_lost(&self) {
         // Increment both counters
-        self.total.fetch_add(1, Ordering::Relaxed);
+        self.inc_recv();
         self.lost.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -29,6 +35,8 @@ impl SampleLossTracker {
         clippy::cast_precision_loss,
         reason = "expected value range is below value for truncation"
     )]
+    /// Compute the fraction of lost samples for the entire duration
+    /// during which this metric has been recorded.
     pub fn frac_lost(&self) -> f64 {
         let total = self.total.load(Ordering::Relaxed) as f64;
         let lost = self.lost.load(Ordering::Relaxed) as f64;
@@ -41,7 +49,7 @@ impl SampleLossTracker {
     }
 }
 
-/// Tracker for first/second-stage RFI zeroing
+/// Tracker for first/second-stage RFI zeroing.
 #[derive(Default)]
 pub struct RFIZeroingTracker {
     first_stage: Arc<AtomicBool>,
@@ -49,16 +57,21 @@ pub struct RFIZeroingTracker {
 }
 
 impl RFIZeroingTracker {
+    /// Record the state of first-stage flagging.
     pub fn set_first(&self, value: bool) {
         self.first_stage.store(value, Ordering::Relaxed);
     }
 
+    /// Record the state of second-stage flagging.
     pub fn set_second(&self, value: bool) {
         self.second_stage.store(value, Ordering::Relaxed);
     }
 }
 
-/// Metrics store
+/// Shared application state for metrics.
+///
+/// Intended to be wrapped in a [`std::sync::Arc`] to be shared
+/// throughout async tasks.
 pub struct Metrics {
     /// # Prometheus metrics
     /// Prometheus registry
@@ -77,7 +90,7 @@ pub struct Metrics {
     pub rfi_zeroing: RFIZeroingTracker,
 }
 
-/// Alias for shared metrics type
+/// Alias for shared metrics type.
 pub type SharedMetrics = Arc<Metrics>;
 
 impl Default for Metrics {
@@ -129,7 +142,7 @@ impl Default for Metrics {
 }
 
 impl Metrics {
-    /// Render all metrics
+    /// Render prometheus metrics
     pub fn serialize(&self) -> Result<String, prometheus::Error> {
         let encoder = TextEncoder::new();
         let metric_families = self.registry.gather();
@@ -138,7 +151,7 @@ impl Metrics {
     }
 }
 
-/// Update Prometheus metrics based on a [`SharedDataState`].
+/// Update metrics based on a [`SharedDataState`].
 ///
 /// Only metrics which are trivial to compute should be updated here.
 ///
@@ -189,6 +202,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// Test that the [`SampleLossTracker`] produces the expected result.
     fn test_sample_loss() {
         let tracker = SampleLossTracker::default();
 

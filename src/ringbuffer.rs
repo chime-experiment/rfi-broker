@@ -4,7 +4,7 @@
 //! separate typed buffers (e.g. `RingBuffer<f32>`, `RingBuffer<u8>`) to
 //! coexist without boxing or type erasure.
 //!
-//! The shape and dimension names are fixed at construction time; frames with
+//! The shape and dimensions are fixed at construction time; frames with
 //! a mismatched shape are dropped on push.
 
 use parking_lot::Mutex;
@@ -22,7 +22,7 @@ const PARTIAL_FRAME_CAPACITY: usize = 8;
 
 /// Single [`RingBuffer`] frame.
 ///
-/// Contains an array and ID.
+/// Contains an array, mask, and ID.
 #[derive(Clone, Debug, Serialize)]
 pub struct Frame<T> {
     /// Numeric identifier
@@ -41,6 +41,9 @@ impl<T> Frame<T>
 where
     T: Num + Clone,
 {
+    /// Create a new frame from an id, shape, and split axis.
+    ///
+    /// Frame array and mask are fully initialized as zeros/false values.
     fn new(id: impl Into<u64>, shape: &[usize], axis: usize) -> Option<Self> {
         // Validate the incoming axis
         let axlen = *shape.to_vec().get(axis)?;
@@ -54,6 +57,12 @@ where
         })
     }
 
+    /// Insert a chunk of data into the frame.
+    ///
+    /// The chunk shape must match the frame shape along all axes other
+    /// than the split. `indices` references the indices along the split
+    /// axis where `chunk` should be written to. `indices` are not required
+    /// to be contiguous.
     fn insert(&mut self, indices: &[usize], chunk: &ArrayViewD<T>) -> Result<u64, String> {
         if chunk
             .shape()
@@ -118,7 +127,7 @@ impl<T> RingBuffer<T>
 where
     T: Num + Clone,
 {
-    /// Create a new ringbuffer
+    /// Create a new ringbuffer with a fixed shape.
     pub fn new(frame_shape: Vec<usize>) -> Self {
         Self {
             frame_shape,
@@ -127,7 +136,7 @@ where
         }
     }
 
-    /// Acquire the lock and push to the buffer.
+    /// Acquire the lock and push a frame to the buffer.
     fn lock_push(&self, frame: Frame<T>) {
         let mut guard = self.frames.lock();
         if guard.len() == RING_CAPACITY {
@@ -141,6 +150,9 @@ where
     /// If the frame is full, push directly to the buffer. Otherwise, store
     /// in a map under the assumption that the rest of the frame will be
     /// received.
+    ///
+    /// Frames which are never filled will eventually get pushed to the frame if
+    /// a sufficient number of samples have been received.
     ///
     /// Assumes that frame `id`s are monotonically increasing.
     fn push_array(
@@ -246,12 +258,14 @@ where
         self.frames.lock().iter().cloned().collect()
     }
 
-    /// Return a copy of the most recent frame
+    /// Return a copy of the most recent frame.
+    ///
+    /// The lock is released before returning.
     pub fn last(&self) -> Option<Frame<T>> {
         self.frames.lock().back().cloned()
     }
 
-    /// Get the length, or number of frames in the buffer
+    /// Get the length, or number of frames in the buffer.
     pub fn len(&self) -> usize {
         self.frames.lock().len()
     }
@@ -259,7 +273,7 @@ where
     /// Return an `N+1` dimensional [`ArrayD`] stacked over an axis, or `None`
     /// if no frames available.
     ///
-    /// Propagates errors from `ndarray::stack`.
+    /// Returns `None` if any errors occur while stacking.
     pub fn stack_array(&self, axis: impl Into<Option<usize>>) -> Option<ArrayD<T>> {
         // Grab a snapshot of the current buffer and relase lock
         let snapshot: Vec<Frame<T>> = self.snapshot();
@@ -271,7 +285,7 @@ where
         ndarray::stack(ax, &views).ok()
     }
 
-    /// Stack the frame masks
+    /// Stack the frame masks.
     pub fn stack_mask(&self) -> Option<Array2<u8>> {
         // Get a snapshot of the current buffer and release lock
         let snapshot: Vec<Frame<T>> = self.snapshot();
@@ -313,6 +327,7 @@ mod tests {
         reason = "casts on small positive integers"
     )]
     #[test]
+    /// Test that partial frames are handled correctly.
     fn test_push_vec() -> Result<(), Box<dyn std::error::Error>> {
         let frame_shape = vec![3, 12];
         // Create a new empty buffer

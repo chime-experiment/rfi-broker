@@ -1,4 +1,4 @@
-//! Axum handlers to expose data.
+//! Axum endpoints and associated functions.
 
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use serde_json::json;
@@ -72,6 +72,8 @@ pub async fn data(State(state): State<SharedDataState>) -> impl IntoResponse {
 }
 
 /// `GET /metrics` - dumps the current prometheus metrics.
+///
+/// Returns `500` if serialisation fails.
 pub async fn metrics(State(m): State<SharedMetrics>) -> impl IntoResponse {
     let metrics = m
         .serialize()
@@ -81,6 +83,8 @@ pub async fn metrics(State(m): State<SharedMetrics>) -> impl IntoResponse {
 }
 
 /// `GET /` - dumps the result of `bad_input_likelihood`.
+///
+/// Can return any error which occurs while computing the metric.
 ///
 /// Required for external compatibility.
 pub async fn dump_bad_input_likelihood(State(state): State<SharedDataState>) -> String {
@@ -93,6 +97,8 @@ pub async fn dump_bad_input_likelihood(State(state): State<SharedDataState>) -> 
 }
 
 /// `GET /inputs` - likelihood that any given input is corrupted.
+///
+/// Returns `500` if any error occurs when computing the metric.
 pub async fn get_bad_input_likelihood(
     State(state): State<SharedDataState>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
@@ -115,8 +121,14 @@ pub async fn get_bad_input_likelihood(
     }
 }
 
-/// Compute the likelihood that an input is bad, based on a [freq, input, time]
-/// array.
+/// Compute the likelihood that an input is bad, based on the `bad_feed_counts`
+/// dataset in the shared state.
+///
+/// The likelihood metric is computed by averaging the number of "bad" feeds
+/// computed by kotekan over time, then taking a median over frequency to
+/// produce a single likelihood value per element. The final likelihood
+/// is derived as a percentage and normalized by the number of kotekan
+/// frames provided by each packet.
 fn compute_bad_input_likelihood(state: &SharedDataState) -> Result<ArrayD<f64>, String> {
     // Grab the buffer if it exists
     let Some(buf) = &state.bad_feed_counts.get() else {
@@ -146,6 +158,10 @@ fn compute_bad_input_likelihood(state: &SharedDataState) -> Result<ArrayD<f64>, 
     Ok(median)
 }
 
+/// Compute a masked mean over the 0th axis of an [`ArrayD`].
+///
+/// The mask must be two-dimensional, with axes matching the first and
+/// last axes of `arr`.
 fn masked_mean_first_axis(arr: &ArrayD<u8>, mask: &Array2<u8>) -> Result<ArrayD<u8>, String> {
     let sum: ArrayD<u8> = arr.sum_axis(Axis(arr.ndim()));
     let norm = mask.sum_axis(Axis(1));
@@ -163,6 +179,7 @@ fn masked_mean_first_axis(arr: &ArrayD<u8>, mask: &Array2<u8>) -> Result<ArrayD<
     ndarray::stack(Axis(0), &mean_val).map_err(|e| e.to_string())
 }
 
+/// Compute the median of an array across an arbitrary axis.
 fn median_axis<D>(arr: &ArrayView<u8, D>, axis: Axis) -> Array<f64, D::Smaller>
 where
     D: Dimension + RemoveAxis,

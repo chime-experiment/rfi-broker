@@ -2,7 +2,7 @@
 
 use crate::packet;
 
-/// Generate a [`packet:Packet`] with specific frequency IDs
+/// Generate a [`packet:Packet`] with specific frequency IDs.
 pub fn packet(freq_ids: Vec<u32>) -> packet::Packet {
     let nsamp = freq_ids.len();
 

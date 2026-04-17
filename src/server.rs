@@ -23,7 +23,8 @@ const UDP_BUF_SIZE_MB: usize = 8;
 
 /// Builds a [`Router`] containing all the endpoints we'd like to enable.
 ///
-/// `store` is injected as Axum [`State`] so handlers can read the buffers.
+/// `state` and `metrics` are injected as Axum [`State`]s so handlers
+/// can read them.
 fn router(state: SharedDataState, metrics: SharedMetrics) -> Router {
     let mut router = Router::new();
     router = router.route("/data", get(endpoints::data));
@@ -85,8 +86,11 @@ async fn packet_handler_task(
         // Pass through the entire os buffer
         loop {
             match sock.try_recv_from(&mut buf) {
+                // Received a packet
                 Ok((len, _)) => match Packet::parse(buf.get(..len).unwrap_or_default()) {
+                    // Successfully parsed the packet
                     Ok(packet) => match state.push(packet) {
+                        // data state push successfull
                         Ok(id) => {
                             metrics.packet_loss.inc_recv();
                             if id != last_update_id {
@@ -94,20 +98,23 @@ async fn packet_handler_task(
                                 update_metrics(&metrics, &state);
                             }
                         }
+                        // failed to push to the data state
                         Err(e) => {
                             metrics.packet_loss.inc_lost();
                             tracing::debug!("Error pushing packet to state: {e}");
                         }
                     },
+                    // failed to parse the packet
                     Err(e) => {
                         metrics.packet_loss.inc_lost();
                         tracing::debug!("Error parsing packet: {e}");
                     }
                 },
+                // no packet available - release the thread
                 Err(ref e) if e.kind() == WouldBlock => {
-                    // No packet available so release the thread
                     break;
                 }
+                // error occured during UDP read
                 Err(e) => {
                     metrics.packet_loss.inc_lost();
                     tracing::debug!("UDP recv error: {e}");

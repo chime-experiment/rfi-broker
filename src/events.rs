@@ -1,10 +1,13 @@
-//! RFI zeroing around solar noon
+//! Tasks implementing repeating async events.
+//!
+//! # Tasks
+//! - ``solar_event_task``: temporarily disables kotekan RFI flagging around
+//!   solar transit
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use sunrise::{Coordinates, SolarDay, SolarEvent};
-use tokio::time::{Instant, sleep_until};
 
 use reqwest::Client;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
@@ -14,12 +17,12 @@ use serde_json::json;
 use crate::config::SharedAppConfig;
 use crate::metrics::SharedMetrics;
 
-/// Convert a Unix timestamp to a [`tokio::time::Instant`].
+/// Get the seconds until a future unix time.
 ///
-/// Useful for triggering fixed-duration `sleep_until` calls.
+/// Useful for triggering fixed-duration `sleep` calls.
 ///
 /// Returns `None` if `unix_time` is in the past.
-fn unix_to_instant(unix_time: i64) -> Option<Instant> {
+fn seconds_until(unix_time: i64) -> Option<Duration> {
     let now_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()?
@@ -32,10 +35,10 @@ fn unix_to_instant(unix_time: i64) -> Option<Instant> {
         return None;
     }
 
-    Some(Instant::now() + std::time::Duration::from_secs(delta_secs.cast_unsigned()))
+    Some(Duration::from_secs(delta_secs.cast_unsigned()))
 }
 
-/// Compute solar noon for `days_offset` days from today
+/// Compute solar noon for `days_offset` days in the future, relative to now.
 fn solar_noon(coord: Coordinates, altitude: f64, days_offset: i64) -> Option<DateTime<Utc>> {
     let mut requested_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -57,7 +60,7 @@ fn solar_noon(coord: Coordinates, altitude: f64, days_offset: i64) -> Option<Dat
     DateTime::<Utc>::from_timestamp(i64::midpoint(rise, set), 0)
 }
 
-/// Send an enable/disable event to the zeroing endpoint
+/// Send an enable/disable event to the zeroing endpoint.
 async fn post_event(
     client: &Client,
     headers: &HeaderMap,
@@ -148,8 +151,8 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) {
         tracing::info!("Next solar noon window at {next_noon}");
 
         // Sleep until the next zeroing disable event
-        if let Some(t) = unix_to_instant(next_event_start) {
-            sleep_until(t).await;
+        if let Some(t) = seconds_until(next_event_start) {
+            tokio::time::sleep(t).await;
             // Send the second-stage event first
             match post_event(
                 &client,
@@ -170,8 +173,8 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) {
         }
 
         // Sleep until the next enable event
-        if let Some(t) = unix_to_instant(next_event_end) {
-            sleep_until(t).await;
+        if let Some(t) = seconds_until(next_event_end) {
+            tokio::time::sleep(t).await;
             // Send the first-stage event first
             match post_event(&client, &headers, &first_stage_addr, &zeroing.target, true).await {
                 Ok(()) => metrics.rfi_zeroing.set_first(true),

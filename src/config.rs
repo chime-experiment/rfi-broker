@@ -1,6 +1,11 @@
-//! Application configuration
+//! Application configuration.
+//!
+//! Parses a `.toml` config file into individual config structs.
+//! The complete config file is represented as [`AppConfig`], where
+//! each member is a section. Each section is optional, and gets parsed
+//! into the corresponding struct.
 
-/// Telescope config
+/// Telescope coordinate configuration
 #[derive(Debug, serde::Deserialize)]
 pub struct TelescopeCoordinates {
     pub latitude: f64,
@@ -8,7 +13,7 @@ pub struct TelescopeCoordinates {
     pub altitude: f64,
 }
 
-/// Endpoint config
+/// RFI zeroing event configuration
 #[derive(Debug, serde::Deserialize)]
 pub struct RFIZeroingConfig {
     pub downtime: u64,
@@ -18,13 +23,16 @@ pub struct RFIZeroingConfig {
     pub second_stage: String,
 }
 
-/// Overall config
+/// Appplication config.
+///
+/// All sections here should be optional.
 #[derive(Debug, serde::Deserialize)]
 pub struct AppConfig {
     pub telescope: Option<TelescopeCoordinates>,
     pub zeroing: Option<RFIZeroingConfig>,
 }
 
+/// Shared [`Config`] type.
 pub type SharedAppConfig = std::sync::Arc<AppConfig>;
 
 /// Load a [`Config`] from a toml file.

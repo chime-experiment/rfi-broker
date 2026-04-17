@@ -1,7 +1,8 @@
-//! Definition of the UDP packet.
+//! Structure of incoming UDP packets, plus parsing.
+//!
+//! The packet must match the one defined in `kotekan`:
+//! <https://github.com/kotekan/kotekan/blob/chord/lib/utils/rfi_functions.h#L14>
 
-// This header must match the one defined in `kotekan`:
-// https://github.com/kotekan/kotekan/blob/chord/lib/utils/rfi_functions.h#L14
 use std::io::Cursor;
 
 use binrw::{BinRead, BinWrite};
@@ -61,11 +62,11 @@ impl Header {
         self.seq_num
     }
 
-    /// Check that values which *shouldn't* change are equal
+    /// Check that values which *shouldn't* change are equal.
     ///
     /// # Errors
     /// Errors if `self` and `other` are not equal for the
-    /// expected fields
+    /// expected fields.
     pub fn check_expected_equal(&self, other: &Self) -> Result<(), String> {
         // Clone *other* and update the members that we expect
         // could have changed
@@ -123,10 +124,10 @@ impl Packet {
         Self::read_le(&mut cursor).map_err(|e| format!("Error parsing packet: {e}"))
     }
 
-    /// Write to bytes
+    /// Write to bytes.
     ///
     /// # Errors
-    /// Errors if writing fails
+    /// Errors if writing fails.
     pub fn to_vec(&self) -> Result<Vec<u8>, String> {
         let mut cursor = Cursor::new(Vec::new());
 

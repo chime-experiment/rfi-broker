@@ -126,10 +126,24 @@ async fn packet_handler_task(
     clippy::panic,
     reason = "panic is desired behaviour for startup failures"
 )]
-pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr, config: AppConfig) {
+pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr, config: Option<AppConfig>) {
     let state: SharedDataState = Arc::new(DataState::default());
     let metrics: SharedMetrics = Arc::new(Metrics::default());
-    let config: Arc<AppConfig> = Arc::new(config);
+    let config: Option<Arc<AppConfig>> = config.map(Arc::new);
+
+    // Start the solar event task, if a config was provided
+    let solar = config.map_or_else(
+        || {
+            tracing::debug!("Solar zeroing disabled - no config was provided.");
+            tokio::spawn(std::future::pending()) // never resolves, effectively disabled
+        },
+        |cfg| {
+            tokio::spawn(crate::events::solar_event_task(
+                Arc::clone(&metrics),
+                Arc::clone(&cfg),
+            ))
+        },
+    );
 
     // Construct the socket and start the packet handling task. If this becomes
     // a bottleneck, it could be run in multiple threads
@@ -141,12 +155,6 @@ pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr, config: AppConfi
         udp_sock,
         Arc::clone(&metrics),
         Arc::clone(&state),
-    ));
-
-    // Start the solar event task
-    let solar = tokio::spawn(crate::events::solar_event_task(
-        Arc::clone(&metrics),
-        Arc::clone(&config),
     ));
 
     let listener = TcpListener::bind(http_addr)

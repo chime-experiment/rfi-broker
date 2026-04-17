@@ -21,8 +21,8 @@ pub struct RFIZeroingConfig {
 /// Overall config
 #[derive(Debug, serde::Deserialize)]
 pub struct AppConfig {
-    pub telescope: TelescopeCoordinates,
-    pub zeroing: RFIZeroingConfig,
+    pub telescope: Option<TelescopeCoordinates>,
+    pub zeroing: Option<RFIZeroingConfig>,
 }
 
 pub type SharedAppConfig = std::sync::Arc<AppConfig>;
@@ -31,11 +31,22 @@ pub type SharedAppConfig = std::sync::Arc<AppConfig>;
 ///
 /// # Errors
 /// Returns [`config:;ConfigError`] if the file can't be read.
-pub fn load(config_path: &str) -> Result<AppConfig, config::ConfigError> {
+pub fn load(config_path: &str) -> Result<Option<AppConfig>, config::ConfigError> {
     // Read and resolve the config file
-    let config: config::Config = config::Config::builder()
+    let conf = config::Config::builder()
         .add_source(config::File::with_name(config_path))
-        .build()?;
+        .build()?
+        .try_deserialize::<AppConfig>()?;
 
-    config.try_deserialize::<AppConfig>()
+    // Both config sections must be provided together, but it's ok
+    // for neither to be provided
+    match (&conf.telescope, &conf.zeroing) {
+        (Some(_), Some(_)) => Ok(Some(conf)),
+        (None, None) => Ok(None),
+        _ => Err(config::ConfigError::NotFound(
+            "`telescope` and `zeroing config sections must either \
+            be provided or excluded together.`"
+                .to_string(),
+        )),
+    }
 }

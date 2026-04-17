@@ -25,7 +25,7 @@ struct Cli {
 
     /// Config file
     #[arg(short, long)]
-    pub config: PathBuf,
+    pub config: Option<PathBuf>,
 
     /// Number of worker threads
     #[arg(short, long, default_value_t = _default_nthreads())]
@@ -62,12 +62,11 @@ fn main() {
     // Extract command-line options
     let cli = Cli::parse();
 
-    // Load the config
-    let Some(config_path) = cli.config.to_str() else {
-        panic!("invalid config file path");
-    };
-    let config = rfi_receiver::config::load(config_path)
-        .unwrap_or_else(|e| panic!("unable to load config file: {e}"));
+    // Load the config, accounting for the fact the both the argument and the
+    // parsed result could be `None`
+    let config = cli.config.as_ref().and_then(|p| p.to_str()).and_then(|s| {
+        rfi_receiver::config::load(s).unwrap_or_else(|e| panic!("unable to load config file: {e}"))
+    });
 
     tracing::debug!("Using {} worker threads", cli.threads);
 

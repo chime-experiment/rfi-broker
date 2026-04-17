@@ -104,20 +104,21 @@ async fn post_event(
 /// # Panics
 /// Panics if the solar noon estimation fails.
 pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) {
+    let (Some(telescope), Some(zeroing)) = (&config.telescope, &config.zeroing) else {
+        tracing::info!("solar event config not set - task going into permanent idle");
+        // Won't wake, so no CPU consumed
+        std::future::pending::<()>().await;
+        unreachable!();
+    };
+
     tracing::debug!(
         "Running solar task for telescope\n{:#?} with endpoint parameters\n{:#?}",
-        config.telescope,
-        config.zeroing
+        telescope,
+        zeroing
     );
     // Construct the addresses only once
-    let first_stage_addr = format!(
-        "https://{}/{}",
-        &config.zeroing.hostname, &config.zeroing.first_stage
-    );
-    let second_stage_addr = format!(
-        "https://{}/{}",
-        &config.zeroing.hostname, &config.zeroing.second_stage
-    );
+    let first_stage_addr = format!("https://{}/{}", &zeroing.hostname, &zeroing.first_stage);
+    let second_stage_addr = format!("https://{}/{}", &zeroing.hostname, &zeroing.second_stage);
 
     // Create a new requests client
     let client = Client::new();
@@ -130,20 +131,19 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) {
 
     // Create a fixed coordinate object
     #[allow(clippy::unwrap_used, reason = "panic on fail is desired behaviour")]
-    let coords: Coordinates =
-        Coordinates::new(config.telescope.latitude, config.telescope.longitude).unwrap();
+    let coords: Coordinates = Coordinates::new(telescope.latitude, telescope.longitude).unwrap();
 
     // One-time calculation of the next solar noon
     #[allow(clippy::unwrap_used, reason = "panic on fail is desired behaviour")]
-    let mut next_noon = solar_noon(coords, config.telescope.altitude, 0).unwrap();
+    let mut next_noon = solar_noon(coords, telescope.altitude, 0).unwrap();
 
     loop {
         #[allow(
             clippy::integer_division,
             reason = "integer division downcasting is desired behaviour"
         )]
-        let next_event_start = next_noon.timestamp() - config.zeroing.downtime.cast_signed() / 2;
-        let next_event_end = next_event_start + config.zeroing.downtime.cast_signed();
+        let next_event_start = next_noon.timestamp() - zeroing.downtime.cast_signed() / 2;
+        let next_event_end = next_event_start + zeroing.downtime.cast_signed();
 
         tracing::info!("Next solar noon window at {next_noon}");
 
@@ -155,7 +155,7 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) {
                 &client,
                 &headers,
                 &second_stage_addr,
-                &config.zeroing.target,
+                &zeroing.target,
                 false,
             )
             .await
@@ -163,15 +163,7 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) {
                 Ok(()) => metrics.rfi_zeroing.set_second(false),
                 Err(e) => tracing::warn!("{e}"),
             }
-            match post_event(
-                &client,
-                &headers,
-                &first_stage_addr,
-                &config.zeroing.target,
-                true,
-            )
-            .await
-            {
+            match post_event(&client, &headers, &first_stage_addr, &zeroing.target, true).await {
                 Ok(()) => metrics.rfi_zeroing.set_first(false),
                 Err(e) => tracing::warn!("{e}"),
             }
@@ -181,27 +173,11 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) {
         if let Some(t) = unix_to_instant(next_event_end) {
             sleep_until(t).await;
             // Send the first-stage event first
-            match post_event(
-                &client,
-                &headers,
-                &first_stage_addr,
-                &config.zeroing.target,
-                true,
-            )
-            .await
-            {
+            match post_event(&client, &headers, &first_stage_addr, &zeroing.target, true).await {
                 Ok(()) => metrics.rfi_zeroing.set_first(true),
                 Err(e) => tracing::warn!("{e}"),
             }
-            match post_event(
-                &client,
-                &headers,
-                &second_stage_addr,
-                &config.zeroing.target,
-                true,
-            )
-            .await
-            {
+            match post_event(&client, &headers, &second_stage_addr, &zeroing.target, true).await {
                 Ok(()) => metrics.rfi_zeroing.set_second(true),
                 Err(e) => tracing::warn!("{e}"),
             }
@@ -212,7 +188,7 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) {
         // Get the next solar noon window. Have to use this extra variable assignment
         // because rust doesn't let us use attributes on expressions
         #[allow(clippy::unwrap_used, reason = "panic on fail is desired behaviour")]
-        let try_next_noon = solar_noon(coords, config.telescope.altitude, 1).unwrap();
+        let try_next_noon = solar_noon(coords, telescope.altitude, 1).unwrap();
         next_noon = try_next_noon;
     }
 }

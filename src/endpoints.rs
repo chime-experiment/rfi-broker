@@ -3,6 +3,8 @@
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use serde_json::json;
 
+use eyre::{OptionExt, bail};
+
 use ndarray::{Array, Array2, ArrayD, ArrayView, ArrayViewD, Axis, Dimension, RemoveAxis};
 
 use crate::datastate::SharedDataState;
@@ -92,7 +94,7 @@ pub async fn dump_bad_input_likelihood(State(state): State<SharedDataState>) -> 
 
     match metric {
         Ok(metric) => format!("rfi_bad_input_mask = {metric}"),
-        Err(e) => e,
+        Err(e) => e.to_string(),
     }
 }
 
@@ -117,7 +119,9 @@ pub async fn get_bad_input_likelihood(
 
             Ok::<_, (StatusCode, String)>(Json(result))
         }
-        Err(e) => Err::<_, (StatusCode, String)>((StatusCode::INTERNAL_SERVER_ERROR, e)),
+        Err(e) => {
+            Err::<_, (StatusCode, String)>((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        }
     }
 }
 
@@ -129,18 +133,18 @@ pub async fn get_bad_input_likelihood(
 /// produce a single likelihood value per element. The final likelihood
 /// is derived as a percentage and normalized by the number of kotekan
 /// frames provided by each packet.
-fn compute_bad_input_likelihood(state: &SharedDataState) -> Result<ArrayD<f64>, String> {
+fn compute_bad_input_likelihood(state: &SharedDataState) -> eyre::Result<ArrayD<f64>> {
     // Grab the buffer if it exists
     let Some(buf) = &state.bad_feed_counts.get() else {
-        return Err("data buffer not initialized".into());
+        bail!("data buffer not initialized");
     };
 
     let Some(arr) = &buf.stack_array(None) else {
-        return Err("data buffer is empty".into());
+        bail!("data buffer is empty");
     };
 
     let Some(mask) = &buf.stack_mask() else {
-        return Err("data buffer incorrectly formatted".into());
+        bail!("data buffer incorrectly formatted");
     };
 
     // Compute the per-feed likelihood metric. This is guaranteed
@@ -150,7 +154,10 @@ fn compute_bad_input_likelihood(state: &SharedDataState) -> Result<ArrayD<f64>, 
     let mut median: ArrayD<f64> = median_axis(&mean_val.view(), Axis(0));
 
     // Convert to a percentage and normalize by the number of frames per packet
-    let meta = state.metadata.get().ok_or("metadata is not accessible")?;
+    let meta = state
+        .metadata
+        .get()
+        .ok_or_eyre("metadata is not accessible")?;
     // NB: this is what was done before, but unclear as to why
     let norm = 100.0 / f64::from(meta.lock().frames_per_packet);
     median *= norm;
@@ -162,7 +169,7 @@ fn compute_bad_input_likelihood(state: &SharedDataState) -> Result<ArrayD<f64>, 
 ///
 /// The mask must be two-dimensional, with axes matching the first and
 /// last axes of `arr`.
-fn masked_mean_first_axis(arr: &ArrayD<u8>, mask: &Array2<u8>) -> Result<ArrayD<u8>, String> {
+fn masked_mean_first_axis(arr: &ArrayD<u8>, mask: &Array2<u8>) -> eyre::Result<ArrayD<u8>> {
     let sum: ArrayD<u8> = arr.sum_axis(Axis(arr.ndim()));
     let norm = mask.sum_axis(Axis(1));
 
@@ -176,7 +183,9 @@ fn masked_mean_first_axis(arr: &ArrayD<u8>, mask: &Array2<u8>) -> Result<ArrayD<
     // Convert to views and stack
     let mean_val: Vec<ArrayViewD<u8>> = mean_val.iter().map(|x| x.view()).collect();
 
-    ndarray::stack(Axis(0), &mean_val).map_err(|e| e.to_string())
+    let stack = ndarray::stack(Axis(0), &mean_val)?;
+
+    Ok(stack)
 }
 
 /// Compute the median of an array across an arbitrary axis.

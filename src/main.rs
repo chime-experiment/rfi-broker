@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::Parser;
+use eyre::WrapErr;
 
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -40,12 +41,7 @@ fn _default_nthreads() -> usize {
 }
 
 /// Parses CLI, resolves config, and starts the server.
-#[allow(
-    clippy::panic,
-    clippy::unwrap_used,
-    reason = "panic is desired behaviour for startup failures"
-)]
-fn main() {
+fn main() -> eyre::Result<()> {
     // Set up logging
     tracing_subscriber::registry()
         // Default to `INFO` log level. Can be adjusted using RUST_LOG
@@ -64,9 +60,15 @@ fn main() {
 
     // Load the config, accounting for the fact the both the argument and the
     // parsed result could be `None`
-    let config = cli.config.as_ref().and_then(|p| p.to_str()).and_then(|s| {
-        rfi_receiver::config::load(s).unwrap_or_else(|e| panic!("unable to load config file: {e}"))
-    });
+    let config = cli
+        .config
+        .as_ref()
+        .and_then(|p| p.to_str())
+        // transpose calls swap the order of Option and Result, with the end effect
+        // of propagating errors occuring in `load` to the parent function
+        .and_then(|s| rfi_receiver::config::load(s).transpose())
+        .transpose()
+        .wrap_err("unable to read config")?;
 
     tracing::debug!("Using {} worker threads", cli.threads);
 
@@ -74,6 +76,9 @@ fn main() {
         .worker_threads(cli.threads)
         .enable_all()
         .build()
-        .unwrap()
-        .block_on(rfi_receiver::server::serve(cli.addr, cli.udp_addr, config));
+        .wrap_err("failed to build async runtime")?
+        .block_on(rfi_receiver::server::serve(cli.addr, cli.udp_addr, config))
+        .wrap_err("server failed")?;
+
+    Ok(())
 }

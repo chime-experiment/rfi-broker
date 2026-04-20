@@ -8,6 +8,8 @@ use std::io::Cursor;
 use binrw::{BinRead, BinWrite};
 use serde::Serialize;
 
+use eyre::{WrapErr, bail};
+
 /// The protocol version to accept. Packets with any other version number
 /// are discarded.
 const EXPECTED_VERSION: u16 = 2;
@@ -56,18 +58,12 @@ pub struct Header {
 }
 
 impl Header {
-    /// Get a numeric ID value for this packet
-    #[must_use]
-    pub const fn id(&self) -> i64 {
-        self.seq_num
-    }
-
     /// Check that values which *shouldn't* change are equal.
     ///
     /// # Errors
     /// Errors if `self` and `other` are not equal for the
     /// expected fields.
-    pub fn check_expected_equal(&self, other: &Self) -> Result<(), String> {
+    pub fn check_expected_equal(&self, other: &Self) -> eyre::Result<()> {
         // Clone *other* and update the members that we expect
         // could have changed
         let mut other_c = *other; // Header is Copy
@@ -75,9 +71,7 @@ impl Header {
         other_c.stream_id.id = self.stream_id.id;
 
         if *self != other_c {
-            return Err(format!(
-                "Mismatched header values. Expected {self:?}, got {other:?}"
-            ));
+            bail!("Mismatched header values. Expected {self:?}, got {other:?}");
         }
         Ok(())
     }
@@ -118,21 +112,21 @@ impl Packet {
     ///
     /// # Errors
     /// Errors if the input buffer cannot be parsed.
-    pub fn parse(buf: &[u8]) -> Result<Self, String> {
+    pub fn parse(buf: &[u8]) -> eyre::Result<Self> {
         let mut cursor = Cursor::new(&buf);
 
-        Self::read_le(&mut cursor).map_err(|e| format!("Error parsing packet: {e}"))
+        Self::read_le(&mut cursor).wrap_err("failed to parse packet from bytes")
     }
 
     /// Write to bytes.
     ///
     /// # Errors
     /// Errors if writing fails.
-    pub fn to_vec(&self) -> Result<Vec<u8>, String> {
+    pub fn to_vec(&self) -> eyre::Result<Vec<u8>> {
         let mut cursor = Cursor::new(Vec::new());
 
         self.write_le(&mut cursor)
-            .map_err(|e| format!("failed to write to bytes: {e}"))?;
+            .wrap_err("failed to write packet to bytes")?;
 
         Ok(cursor.into_inner())
     }

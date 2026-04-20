@@ -2,12 +2,15 @@
 //!
 //! # Endpoints
 //! - ``metadata``: Most recent packet header metadata
+//! - ``metrics``: Application prometheus metrics
 //! - ``data``: Dump all ringbuffers
 //! - ``bad_input_likelihood``: per-input likelihood of a feed being corrupted
 
 use std::io::ErrorKind::WouldBlock;
 use std::net::SocketAddr;
 use std::sync::Arc;
+
+use eyre::WrapErr;
 
 use axum::{Router, routing::get};
 use tokio::net::{TcpListener, UdpSocket};
@@ -59,7 +62,7 @@ async fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Error> {
         reason = "buffer size should never be large enough to cause precision loss"
     )]
     let actual = sock_ref.recv_buffer_size()? as f64 / 1024_f64 / 1024_f64;
-    tracing::debug!("Request {UDP_BUF_SIZE_MB}MB recv buffer, got {}MB", actual,);
+    tracing::debug!("Request {UDP_BUF_SIZE_MB}MB recv buffer, got {actual}MB");
 
     tracing::info!("UDP socket listening on {addr}");
 
@@ -101,13 +104,13 @@ async fn packet_handler_task(
                         // failed to push to the data state
                         Err(e) => {
                             metrics.packet_loss.inc_lost();
-                            tracing::debug!("Error pushing packet to state: {e}");
+                            tracing::warn!("Error pushing packet to state: {:#?}", e);
                         }
                     },
                     // failed to parse the packet
                     Err(e) => {
                         metrics.packet_loss.inc_lost();
-                        tracing::debug!("Error parsing packet: {e}");
+                        tracing::warn!("Error parsing packet: {:#?}", e);
                     }
                 },
                 // no packet available - release the thread
@@ -117,7 +120,7 @@ async fn packet_handler_task(
                 // error occured during UDP read
                 Err(e) => {
                     metrics.packet_loss.inc_lost();
-                    tracing::debug!("UDP recv error: {e}");
+                    tracing::debug!("UDP recv error: {:#?}", e);
                 }
             }
         }
@@ -127,13 +130,13 @@ async fn packet_handler_task(
 /// Spawns the UDP listener and HTTP server as ndependent tasks,
 /// then waits for either to exit.
 ///
-/// # Panics
-/// Panics if either address cannot be bound.
-#[allow(
-    clippy::panic,
-    reason = "panic is desired behaviour for startup failures"
-)]
-pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr, config: Option<AppConfig>) {
+/// # Errors
+/// Errors if either address cannot be bound.
+pub async fn serve(
+    http_addr: SocketAddr,
+    udp_addr: SocketAddr,
+    config: Option<AppConfig>,
+) -> eyre::Result<()> {
     let state: SharedDataState = Arc::new(DataState::default());
     let metrics: SharedMetrics = Arc::new(Metrics::default());
     let config: Option<Arc<AppConfig>> = config.map(Arc::new);
@@ -154,9 +157,7 @@ pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr, config: Option<A
 
     // Construct the socket and start the packet handling task. If this becomes
     // a bottleneck, it could be run in multiple threads
-    let udp_sock = construct_sock(udp_addr)
-        .await
-        .unwrap_or_else(|e| panic!("Failed to bind UDP listener on {udp_addr}: {e}"));
+    let udp_sock = construct_sock(udp_addr).await?;
 
     let packet_handler = tokio::spawn(packet_handler_task(
         udp_sock,
@@ -164,16 +165,17 @@ pub async fn serve(http_addr: SocketAddr, udp_addr: SocketAddr, config: Option<A
         Arc::clone(&state),
     ));
 
-    let listener = TcpListener::bind(http_addr)
-        .await
-        .unwrap_or_else(|e| panic!("Failed to bind HTTP listener on {http_addr}: {e}"));
+    let http_listener = TcpListener::bind(http_addr).await?;
 
-    let http = tokio::spawn(axum::serve(listener, router(state, metrics)).into_future());
+    let http = tokio::spawn(axum::serve(http_listener, router(state, metrics)).into_future());
     tracing::info!("HTTP listening on {http_addr}");
 
+    // NB: each task will shut down right away if any task fails. This is mostly fine,
+    // but it would result in an undesirable zeroing state
+    // TODO: make the zeroing task more robust to failures
     tokio::select! {
-        _ = packet_handler => tracing::error!("Packet handler exited unexpectedly"),
-        _ = http => tracing::error!("HTTP server exited unexpectedly"),
-        _ = solar => tracing::error!("Solar event task exited unexpectedly"),
+        result = packet_handler => result?.wrap_err("packet handler failed"),
+        result = http => result?.wrap_err("http server failed"),
+        result = solar => result?.wrap_err("solar zeroing task failed"),
     }
 }

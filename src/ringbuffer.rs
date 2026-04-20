@@ -13,6 +13,8 @@ use std::collections::{BTreeMap, VecDeque};
 use serde::Serialize;
 use serde_json::Value;
 
+use eyre::{WrapErr, bail, eyre};
+
 use ndarray::{Array2, ArrayD, ArrayViewD, Axis, IxDyn};
 use num_traits::Num;
 
@@ -26,7 +28,7 @@ const PARTIAL_FRAME_CAPACITY: usize = 8;
 #[derive(Clone, Debug, Serialize)]
 pub struct Frame<T> {
     /// Numeric identifier
-    pub id: u64,
+    pub sequence_id: u64,
     /// Arbitrary-sized array
     pub array: ArrayD<T>,
     /// Track how many slices of the array exist
@@ -44,12 +46,15 @@ where
     /// Create a new frame from an id, shape, and split axis.
     ///
     /// Frame array and mask are fully initialized as zeros/false values.
-    fn new(id: impl Into<u64>, shape: &[usize], axis: usize) -> Option<Self> {
+    fn new(sequence_id: impl Into<u64>, shape: &[usize], axis: usize) -> eyre::Result<Self> {
         // Validate the incoming axis
-        let axlen = *shape.to_vec().get(axis)?;
+        let axlen = *shape
+            .to_vec()
+            .get(axis)
+            .ok_or_else(|| eyre!("axis {axis} is invalid for expected frame shape"))?;
 
-        Some(Self {
-            id: id.into(),
+        Ok(Self {
+            sequence_id: sequence_id.into(),
             array: ArrayD::<T>::zeros(IxDyn(shape)),
             mask: vec![false; axlen],
             sample_count: 0,
@@ -63,18 +68,18 @@ where
     /// than the split. `indices` references the indices along the split
     /// axis where `chunk` should be written to. `indices` are not required
     /// to be contiguous.
-    fn insert(&mut self, indices: &[usize], chunk: &ArrayViewD<T>) -> Result<u64, String> {
+    fn insert(&mut self, indices: &[usize], chunk: &ArrayViewD<T>) -> eyre::Result<u64> {
         if chunk
             .shape()
             .get(self.axis)
             .is_none_or(|x| *x != indices.len())
         {
-            return Err(format!(
+            bail!(
                 "number of indices does not match chunk shape on axis {}: {} != {:?}",
                 self.axis,
                 indices.len(),
                 chunk.shape(),
-            ));
+            );
         }
         // Don't assume that indices are contiguous
         let axis = Axis(self.axis);
@@ -83,15 +88,15 @@ where
             // Check that the indices make sense, and that this sample
             // hasn't already been received
             let Some(m_sl) = self.mask.get_mut(*idx) else {
-                return Err(format!(
+                bail!(
                     "invalid index {idx} on axis {} for frame shape {:?}",
                     self.axis,
                     self.array.shape()
-                ));
+                );
             };
 
             if *m_sl {
-                return Err("tried to insert an index which has already been written".into());
+                bail!("tried to insert an index which has already been written: {idx}");
             }
             // Insert to the array and update the mask
             self.array
@@ -158,11 +163,11 @@ where
     fn push_array(
         &self,
         array: &ArrayD<T>,
-        id: impl Into<u64>,
+        sequence_id: impl Into<u64>,
         indices: &[usize],
         axis: usize,
-    ) -> Result<u64, String> {
-        let key: u64 = id.into();
+    ) -> eyre::Result<u64> {
+        let key: u64 = sequence_id.into();
         // Want to hold this lock throughout this whole op
         let mut guard = self.partial_frames.lock();
 
@@ -172,14 +177,13 @@ where
             if let Some((&oldest_id, _)) = guard.first_key_value()
                 && key < oldest_id
             {
-                return Err(format!(
+                bail!(
                     "Tried to push data with id {key} older than the \
                     oldest available entry id {oldest_id}"
-                ));
+                );
             }
             // Create a new frame and insert it
-            let new_frame: Frame<T> = Frame::new(key, &self.frame_shape, axis)
-                .ok_or(format!("axis {axis} is invalid for expected frame shape."))?;
+            let new_frame: Frame<T> = Frame::new(key, &self.frame_shape, axis)?;
             // Evict the oldest frame and push to the buffer if it seems to
             // have received a reasonable number of samples
             if guard.len() == PARTIAL_FRAME_CAPACITY {
@@ -234,19 +238,19 @@ where
         id: impl Into<u64>,
         indices: &[usize],
         axis: usize,
-    ) -> Result<u64, String> {
+    ) -> eyre::Result<u64> {
         // Sort out the shape of this chunk
         let mut shape = self.frame_shape.clone();
         let ax_shape = shape.get_mut(axis).ok_or_else(|| {
-            format!(
+            eyre!(
                 "Axis `{axis}` is out of bounds for shape {:?}",
                 self.frame_shape
             )
         })?;
         *ax_shape = indices.len();
 
-        let arr = ArrayD::from_shape_vec(shape, vec)
-            .map_err(|e| format!("Failed to construct array from vec: {e}"))?;
+        let arr =
+            ArrayD::from_shape_vec(shape, vec).wrap_err("failed to construct array from vec")?;
 
         self.push_array(&arr, id, indices, axis)
     }

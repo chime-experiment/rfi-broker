@@ -36,7 +36,7 @@ pub type SharedDataState = Arc<DataState>;
 
 impl DataState {
     /// Push a packet to the state, initializing on first push.
-    pub fn push(&self, packet: Packet) -> Result<u64, String> {
+    pub fn push(&self, packet: Packet) -> eyre::Result<u64> {
         let body: Body = packet.body;
         let header: Header = packet.header;
 
@@ -48,7 +48,7 @@ impl DataState {
 
         // Convert the frequency indices into the expected type
         let indices: Vec<usize> = body.freq_ids.iter().map(|&x| x as usize).collect();
-        let id = header.id().cast_unsigned();
+        let id = header.seq_num.cast_unsigned();
         let axis: usize = 0;
 
         // Push to each ringbuffer, initializing if this is the first push

@@ -12,6 +12,8 @@ use sunrise::{Coordinates, SolarDay, SolarEvent};
 use reqwest::Client;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 
+use eyre::{OptionExt, Report, WrapErr, eyre};
+
 use serde_json::json;
 
 use crate::config::SharedAppConfig;
@@ -39,6 +41,8 @@ fn seconds_until(unix_time: i64) -> Option<Duration> {
 }
 
 /// Compute solar noon for `days_offset` days in the future, relative to now.
+///
+/// Return `None` if the computation failed for some reason.
 fn solar_noon(coord: Coordinates, altitude: f64, days_offset: i64) -> Option<DateTime<Utc>> {
     let mut requested_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -60,6 +64,17 @@ fn solar_noon(coord: Coordinates, altitude: f64, days_offset: i64) -> Option<Dat
     DateTime::<Utc>::from_timestamp(i64::midpoint(rise, set), 0)
 }
 
+/// Error handling for event tasks.
+#[derive(Debug, thiserror::Error)]
+pub enum PostError {
+    /// Network/connection failure
+    #[error("client request failed")]
+    Request(#[from] Report),
+    /// Bad status
+    #[error("bad status {status}: {body}")]
+    BadStatus { status: u16, body: String },
+}
+
 /// Send an enable/disable event to the zeroing endpoint.
 async fn post_event(
     client: &Client,
@@ -67,7 +82,7 @@ async fn post_event(
     endpoint: &str,
     target: &str,
     enable: bool,
-) -> Result<(), String> {
+) -> Result<reqwest::StatusCode, PostError> {
     let payload = json!({target: enable});
 
     let result = client
@@ -76,16 +91,20 @@ async fn post_event(
         .json(&payload)
         .send()
         .await
-        .map_err(|e| format!("failed to send signal to endpoint {endpoint}: {e}"))?;
+        .wrap_err("failed to send event signal to endpoint")?;
 
-    if !result.status().is_success() {
-        return Err(format!(
-            "Failed to send {enable} to {endpoint}: {}",
-            result.status()
-        ));
+    let status = result.status();
+
+    if !status.is_success() {
+        return Err(PostError::BadStatus {
+            status: status.as_u16(),
+            body: status
+                .canonical_reason()
+                .map_or("null".into(), std::string::ToString::to_string),
+        });
     }
 
-    Ok(())
+    Ok(status)
 }
 
 /// Task to run solar noon zeroing.
@@ -106,7 +125,7 @@ async fn post_event(
 ///
 /// # Panics
 /// Panics if the solar noon estimation fails.
-pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) {
+pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) -> eyre::Result<()> {
     let (Some(telescope), Some(zeroing)) = (&config.telescope, &config.zeroing) else {
         tracing::info!("solar event config not set - task going into permanent idle");
         // Won't wake, so no CPU consumed
@@ -133,12 +152,17 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) {
     );
 
     // Create a fixed coordinate object
-    #[allow(clippy::unwrap_used, reason = "panic on fail is desired behaviour")]
-    let coords: Coordinates = Coordinates::new(telescope.latitude, telescope.longitude).unwrap();
+    let coords = Coordinates::new(telescope.latitude, telescope.longitude).ok_or_else(|| {
+        eyre!(
+            "invalid coordinates: {:#?}, {:#?}",
+            telescope.latitude,
+            telescope.longitude
+        )
+    })?;
 
     // One-time calculation of the next solar noon
-    #[allow(clippy::unwrap_used, reason = "panic on fail is desired behaviour")]
-    let mut next_noon = solar_noon(coords, telescope.altitude, 0).unwrap();
+    let mut next_noon =
+        solar_noon(coords, telescope.altitude, 0).ok_or_eyre("failed to compute solar noon.")?;
 
     loop {
         #[allow(
@@ -163,12 +187,22 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) {
             )
             .await
             {
-                Ok(()) => metrics.rfi_zeroing.set_second(false),
-                Err(e) => tracing::warn!("{e}"),
+                Ok(_) => metrics.rfi_zeroing.set_second(false),
+                Err(PostError::BadStatus { status, body }) => {
+                    tracing::warn!(%status, %body);
+                }
+                Err(PostError::Request(report)) => {
+                    tracing::error!(error = ?report);
+                }
             }
             match post_event(&client, &headers, &first_stage_addr, &zeroing.target, true).await {
-                Ok(()) => metrics.rfi_zeroing.set_first(false),
-                Err(e) => tracing::warn!("{e}"),
+                Ok(_) => metrics.rfi_zeroing.set_first(false),
+                Err(PostError::BadStatus { status, body }) => {
+                    tracing::warn!(%status, %body);
+                }
+                Err(PostError::Request(report)) => {
+                    tracing::error!(error = ?report);
+                }
             }
         }
 
@@ -177,21 +211,31 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) {
             tokio::time::sleep(t).await;
             // Send the first-stage event first
             match post_event(&client, &headers, &first_stage_addr, &zeroing.target, true).await {
-                Ok(()) => metrics.rfi_zeroing.set_first(true),
-                Err(e) => tracing::warn!("{e}"),
+                Ok(_) => metrics.rfi_zeroing.set_first(true),
+                Err(PostError::BadStatus { status, body }) => {
+                    tracing::warn!(%status, %body);
+                }
+                Err(PostError::Request(report)) => {
+                    tracing::error!(error = ?report);
+                }
             }
             match post_event(&client, &headers, &second_stage_addr, &zeroing.target, true).await {
-                Ok(()) => metrics.rfi_zeroing.set_second(true),
-                Err(e) => tracing::warn!("{e}"),
+                Ok(_) => metrics.rfi_zeroing.set_second(true),
+                Err(PostError::BadStatus { status, body }) => {
+                    tracing::warn!(%status, %body);
+                }
+                Err(PostError::Request(report)) => {
+                    tracing::error!(error = ?report);
+                }
             }
         } else {
-            tracing::debug!("Solar post-noon event time has already passed. Skipping...");
+            tracing::debug!("Solar noon event time has already passed. Skipping...");
         }
 
         // Get the next solar noon window. Have to use this extra variable assignment
         // because rust doesn't let us use attributes on expressions
-        #[allow(clippy::unwrap_used, reason = "panic on fail is desired behaviour")]
-        let try_next_noon = solar_noon(coords, telescope.altitude, 1).unwrap();
+        let try_next_noon =
+            solar_noon(coords, telescope.altitude, 1).ok_or_eyre("failed to compute solar noon")?;
         next_noon = try_next_noon;
     }
 }

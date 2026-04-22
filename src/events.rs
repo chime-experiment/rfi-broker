@@ -160,7 +160,7 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) -
         )
     })?;
 
-    // One-time calculation of the next solar noon
+    // One-time calculation of solar noon for the current day. This could be in the past
     let mut next_noon =
         solar_noon(coords, telescope.altitude, 0).ok_or_eyre("failed to compute solar noon.")?;
 
@@ -178,6 +178,7 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) -
         if let Some(t) = seconds_until(next_event_start) {
             tokio::time::sleep(t).await;
             // Send the second-stage event first
+            tracing::debug!("Sending second-stage `disable` event...");
             match post_event(
                 &client,
                 &headers,
@@ -195,6 +196,7 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) -
                     tracing::error!(error = ?report);
                 }
             }
+            tracing::debug!("Second first-stage `disable` event...");
             match post_event(&client, &headers, &first_stage_addr, &zeroing.target, true).await {
                 Ok(_) => metrics.rfi_zeroing.set_first(false),
                 Err(PostError::BadStatus { status, body }) => {
@@ -206,32 +208,39 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) -
             }
         }
 
-        // Sleep until the next enable event
+        // Sleep until the next enable event. If the even has passed, we still want
+        // to make sure that zeroing is enabled outside of the transit window. The
+        // `else` case here should only be accessible on the first pass of this loop.
         if let Some(t) = seconds_until(next_event_end) {
             tokio::time::sleep(t).await;
-            // Send the first-stage event first
-            match post_event(&client, &headers, &first_stage_addr, &zeroing.target, true).await {
-                Ok(_) => metrics.rfi_zeroing.set_first(true),
-                Err(PostError::BadStatus { status, body }) => {
-                    tracing::warn!(%status, %body);
-                }
-                Err(PostError::Request(report)) => {
-                    tracing::error!(error = ?report);
-                }
-            }
-            match post_event(&client, &headers, &second_stage_addr, &zeroing.target, true).await {
-                Ok(_) => metrics.rfi_zeroing.set_second(true),
-                Err(PostError::BadStatus { status, body }) => {
-                    tracing::warn!(%status, %body);
-                }
-                Err(PostError::Request(report)) => {
-                    tracing::error!(error = ?report);
-                }
-            }
         } else {
-            tracing::debug!("Solar noon event time has already passed. Skipping...");
+            tracing::debug!(
+                "Solar noon event time has already passed, but we'll ensure \
+                that zeroing is enabled anyway."
+            );
         }
 
+        // Send the first-stage event first
+        tracing::debug!("Sending first-stage `enable` event...");
+        match post_event(&client, &headers, &first_stage_addr, &zeroing.target, true).await {
+            Ok(_) => metrics.rfi_zeroing.set_first(true),
+            Err(PostError::BadStatus { status, body }) => {
+                tracing::warn!(%status, %body);
+            }
+            Err(PostError::Request(report)) => {
+                tracing::error!(error = ?report);
+            }
+        }
+        tracing::debug!("Second second-stage `enable` event...");
+        match post_event(&client, &headers, &second_stage_addr, &zeroing.target, true).await {
+            Ok(_) => metrics.rfi_zeroing.set_second(true),
+            Err(PostError::BadStatus { status, body }) => {
+                tracing::warn!(%status, %body);
+            }
+            Err(PostError::Request(report)) => {
+                tracing::error!(error = ?report);
+            }
+        }
         // Get the next solar noon window. Have to use this extra variable assignment
         // because rust doesn't let us use attributes on expressions
         let try_next_noon =

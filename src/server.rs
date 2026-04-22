@@ -12,7 +12,11 @@ use std::sync::Arc;
 
 use eyre::WrapErr;
 
-use axum::{Router, routing::get};
+use axum::{
+    Router,
+    middleware::{self, Next},
+    routing::get,
+};
 use tokio::net::{TcpListener, UdpSocket};
 
 use crate::config::AppConfig;
@@ -24,28 +28,49 @@ use crate::packet::Packet;
 /// Size in MB for the UDP socket buffer
 const UDP_BUF_SIZE_MB: usize = 8;
 
+/// Middleware to emit a debug message every time an endpoint is triggered.
+async fn debug_log_middleware(
+    req: axum::http::Request<axum::body::Body>,
+    next: Next,
+) -> axum::response::Response {
+    tracing::debug!(
+        method = %req.method(),
+        uri = %req.uri(),
+        "-> incoming request"
+    );
+
+    let response = next.run(req).await;
+
+    tracing::debug!(status = %response.status(), "<- outgoing response");
+
+    response
+}
+
 /// Builds a [`Router`] containing all the endpoints we'd like to enable.
 ///
 /// `state` and `metrics` are injected as Axum [`State`]s so handlers
 /// can read them.
-fn router(state: SharedDataState, metrics: SharedMetrics) -> Router {
-    let mut router = Router::new();
-    router = router.route("/data", get(endpoints::data));
-    router = router.route("/metadata", get(endpoints::metadata));
-    router = router.route(
-        "/bad_input_likelihood",
-        get(endpoints::get_bad_input_likelihood),
-    );
-    router = router.route("/", get(endpoints::dump_bad_input_likelihood));
+fn make_router(state: SharedDataState, metrics: SharedMetrics) -> Router {
+    // router using information from the data state
+    let state_router = Router::new()
+        .route("/data", get(endpoints::data))
+        .route("/metadata", get(endpoints::metadata))
+        .route(
+            "/bad_input_likelihood",
+            get(endpoints::get_bad_input_likelihood),
+        )
+        .route("/", get(endpoints::dump_bad_input_likelihood))
+        .with_state(state);
 
-    let router = router.with_state(state);
-
-    // Add metrics state
+    // router for metrics
     let metrics_router = Router::new()
         .route("/metrics", get(endpoints::metrics))
         .with_state(metrics);
 
-    router.merge(metrics_router)
+    Router::new()
+        .merge(state_router)
+        .merge(metrics_router)
+        .layer(middleware::from_fn(debug_log_middleware))
 }
 
 /// Construct a UDP socket with a buffer large enough to handle burst events.
@@ -167,7 +192,7 @@ pub async fn serve(
 
     let http_listener = TcpListener::bind(http_addr).await?;
 
-    let http = tokio::spawn(axum::serve(http_listener, router(state, metrics)).into_future());
+    let http = tokio::spawn(axum::serve(http_listener, make_router(state, metrics)).into_future());
     tracing::info!("HTTP listening on {http_addr}");
 
     // NB: each task will shut down right away if any task fails. This is mostly fine,

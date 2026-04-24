@@ -133,7 +133,7 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) -
         unreachable!();
     };
 
-    tracing::debug!(
+    tracing::info!(
         "Running solar task for telescope\n{:#?} with endpoint parameters\n{:#?}",
         telescope,
         zeroing
@@ -214,7 +214,7 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) -
         if let Some(t) = seconds_until(next_event_end) {
             tokio::time::sleep(t).await;
         } else {
-            tracing::debug!(
+            tracing::info!(
                 "Solar noon event time has already passed, but we'll ensure \
                 that zeroing is enabled anyway."
             );

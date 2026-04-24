@@ -87,7 +87,7 @@ async fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Error> {
         reason = "buffer size should never be large enough to cause precision loss"
     )]
     let actual = sock_ref.recv_buffer_size()? as f64 / 1024_f64 / 1024_f64;
-    tracing::debug!("Request {UDP_BUF_SIZE_MB}MB recv buffer, got {actual}MB");
+    tracing::debug!("Requested {UDP_BUF_SIZE_MB}MB recv buffer, got {actual}MB");
 
     tracing::info!("UDP socket listening on {addr}");
 
@@ -169,7 +169,7 @@ pub async fn serve(
     // Start the solar event task, if a config was provided
     let solar = config.map_or_else(
         || {
-            tracing::debug!("Solar zeroing disabled - no config was provided.");
+            tracing::info!("Solar zeroing disabled - no config was provided.");
             tokio::spawn(std::future::pending()) // never resolves, effectively disabled
         },
         |cfg| {

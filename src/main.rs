@@ -70,7 +70,7 @@ fn main() -> eyre::Result<()> {
         .transpose()
         .wrap_err("unable to read config")?;
 
-    tracing::debug!("Using {} worker threads", cli.threads);
+    tracing::info!("Using {} worker threads", cli.threads);
 
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(cli.threads)

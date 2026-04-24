@@ -198,11 +198,15 @@ where
                 // then, becomes `PARTIAL_FRAME_CAPACITY * packet_cadence`. However, this
                 // approach introduces a delay equivalent to the full timeout time in the case
                 // where a frame never becomes full.
-                if let Some(last_frame) = self.last()
-                    && frame.sample_count >= last_frame.sample_count
-                {
-                    self.lock_push(frame);
-                }
+                self.lock_push(frame);
+                // if frame.sample_count >= self.last().map_or(0, |f| f.sample_count) {
+                //     self.lock_push(frame);
+                // } else {
+                //     tracing::debug!(
+                //         "Dropped frame with sequence number {} due to missing samples",
+                //         frame.sequence_id
+                //     );
+                // }
             }
             guard.insert(key, new_frame);
         }

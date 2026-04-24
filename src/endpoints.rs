@@ -36,37 +36,58 @@ pub async fn data(State(state): State<SharedDataState>) -> impl IntoResponse {
     // Dump all the current buffers
     if let Some(frac_flagged) = state.frac_flagged.get() {
         let len = frac_flagged.len();
+        let shape = frac_flagged.shape();
+        let queue_len = frac_flagged.queue_len();
         let frac_flagged = frac_flagged
             .serialize()
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
         result.insert(
             "frac_flagged".into(),
-            json!({"frame_count": len, "frames": frac_flagged}),
+            json!({
+                "frame_count": len,
+                "frames_in_queue": queue_len,
+                "frame_shape": shape,
+                "frames": frac_flagged
+            }),
         );
     }
 
     if let Some(sktilde_avg) = state.sktilde_avg.get() {
         let len = sktilde_avg.len();
+        let shape = sktilde_avg.shape();
+        let queue_len = sktilde_avg.queue_len();
         let sktilde_avg = sktilde_avg
             .serialize()
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
         result.insert(
             "sktilde_avg".into(),
-            json!({"frame_count": len, "frames": sktilde_avg}),
+            json!({
+                "frame_count": len,
+                "frames_in_queue": queue_len,
+                "frame_shape": shape,
+                "frames": sktilde_avg
+            }),
         );
     }
 
     if let Some(bad_feed_counts) = state.bad_feed_counts.get() {
         let len = bad_feed_counts.len();
+        let shape = bad_feed_counts.shape();
+        let queue_len = bad_feed_counts.queue_len();
         let bad_feed_counts = bad_feed_counts
             .serialize()
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
         result.insert(
             "bad_feed_counts".into(),
-            json!({"frame_count": len, "frames": bad_feed_counts}),
+            json!({
+                "frame_count": len,
+                "frames_in_queue": queue_len,
+                "frame_shape": shape,
+                "frames": bad_feed_counts
+            }),
         );
     }
 

@@ -190,19 +190,19 @@ fn compute_bad_input_likelihood(state: &SharedDataState) -> eyre::Result<ArrayD<
 ///
 /// The mask must be two-dimensional, with axes matching the first and
 /// last axes of `arr`.
-fn masked_mean_first_axis(arr: &ArrayD<u8>, mask: &Array2<u8>) -> eyre::Result<ArrayD<u8>> {
-    let sum: ArrayD<u8> = arr.sum_axis(Axis(arr.ndim()));
-    let norm = mask.sum_axis(Axis(1));
+fn masked_mean_first_axis(arr: &ArrayD<u8>, mask: &Array2<u8>) -> eyre::Result<ArrayD<u32>> {
+    let sum: ArrayD<u32> = arr.mapv(u32::from).sum_axis(Axis(arr.ndim() - 1));
+    let norm = mask.mapv(u32::from).sum_axis(Axis(1));
 
-    let mean_val: Vec<ArrayD<u8>> = sum
+    let mean_val: Vec<ArrayD<u32>> = sum
         .axis_iter(Axis(0))
         .zip(norm.iter())
-        .filter(|(_, val)| **val > 0_u8)
+        .filter(|(_, val)| **val > 0_u32)
         .map(|(slice, &val)| &slice / val)
         .collect();
 
     // Convert to views and stack
-    let mean_val: Vec<ArrayViewD<u8>> = mean_val.iter().map(|x| x.view()).collect();
+    let mean_val: Vec<ArrayViewD<u32>> = mean_val.iter().map(|x| x.view()).collect();
 
     let stack = ndarray::stack(Axis(0), &mean_val)?;
 
@@ -210,7 +210,7 @@ fn masked_mean_first_axis(arr: &ArrayD<u8>, mask: &Array2<u8>) -> eyre::Result<A
 }
 
 /// Compute the median of an array across an arbitrary axis.
-fn median_axis<D>(arr: &ArrayView<u8, D>, axis: Axis) -> Array<f64, D::Smaller>
+fn median_axis<D>(arr: &ArrayView<u32, D>, axis: Axis) -> Array<f64, D::Smaller>
 where
     D: Dimension + RemoveAxis,
 {

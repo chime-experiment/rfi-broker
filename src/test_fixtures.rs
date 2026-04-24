@@ -16,7 +16,6 @@ pub fn packet(freq_ids: Vec<u32>) -> packet::Packet {
         num_local_freq: 2_u32,
         frames_per_packet: 2_u32,
         seq_num: 0_i64,
-        stream_id: packet::stream_t { id: 101_u64 },
     };
 
     let body = packet::Body {

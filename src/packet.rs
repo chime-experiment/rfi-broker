@@ -14,18 +14,6 @@ use eyre::{WrapErr, bail};
 /// are discarded.
 const EXPECTED_VERSION: u16 = 2;
 
-/// Packet-specific `stream_id` type
-#[derive(BinRead, BinWrite, Debug, Default, Clone, Copy, PartialEq, Serialize)]
-#[brw(little)]
-#[allow(
-    dead_code,
-    non_camel_case_types,
-    reason = "mirrors the type defined in kotekan"
-)]
-pub struct stream_t {
-    pub id: u64,
-}
-
 /// Decoded header from a UDP datagram.
 ///
 /// `#[derive(BinRead)]` with `#[br(little)]` instructs `binrw` to deserialize
@@ -53,8 +41,6 @@ pub struct Header {
     pub frames_per_packet: u32,
     /// FPGA sequence number of the first sample integrated into the packet
     pub seq_num: i64,
-    /// Current `stream_id` value
-    pub stream_id: stream_t,
 }
 
 impl Header {
@@ -68,7 +54,6 @@ impl Header {
         // could have changed
         let mut other_c = *other; // Header is Copy
         other_c.seq_num = self.seq_num;
-        other_c.stream_id.id = self.stream_id.id;
 
         if *self != other_c {
             bail!("Mismatched header values. Expected {self:?}, got {other:?}");

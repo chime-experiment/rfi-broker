@@ -123,8 +123,11 @@ mod tests {
     use crate::test_fixtures;
 
     #[test]
-    fn test_bin_roundtrip() {
-        let packet = test_fixtures::packet(vec![0_u32, 1]);
+    fn test_bin_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+        let packets = test_fixtures::make_packets(3, 1)?;
+        let packet = packets
+            .first()
+            .ok_or("packet was not constructed successfully")?;
 
         let bin = packet.to_vec().unwrap();
         let parsed = Packet::parse(&bin).unwrap();
@@ -132,6 +135,8 @@ mod tests {
         // NB: this shouldn't fail, but one possible reason would
         // be floating point error. Consider `approx` crate and
         // `assert_relative_eq!` if this is an issue.
-        assert_eq!(packet, parsed);
+        assert_eq!(packet, &parsed);
+
+        Ok(())
     }
 }

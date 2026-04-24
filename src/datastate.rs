@@ -93,15 +93,10 @@ mod tests {
         let state = DataState::default();
 
         // Produce and push a couple of packets
-        #[allow(
-            unused,
-            reason = "want to access final value of variable mutated in loop"
-        )]
-        let mut packet = crate::packet::Packet::default();
+        let packets = test_fixtures::make_packets(4, 2)?;
+        assert_eq!(packets.len(), 2);
 
-        // Just push single chunks for now. Packet fixture uses
-        for i in (0..4).step_by(2) {
-            packet = test_fixtures::packet(vec![i, i + 1]);
+        for packet in &packets {
             state.push(packet.clone())?;
         }
 
@@ -112,27 +107,48 @@ mod tests {
         assert!(state.bad_feed_counts.get().is_some());
 
         // Check that the metadata is what we expect
-        let meta = state.metadata.get().ok_or("error getting metadata")?;
-        meta.lock().check_expected_equal(&packet.header)?;
+        let meta = state.metadata.get().ok_or("error getting metadata")?.lock();
+        let header = packets
+            .get(1)
+            .ok_or("packets not successfully constructed")?
+            .header;
+        meta.check_expected_equal(&header)?;
 
-        // Check that each buffer has expected number of frames (1)
+        // Check that specific metadata values are correct
+        assert_eq!(meta.num_total_freq, 4);
+        assert_eq!(meta.num_local_freq, 2);
+        assert_eq!(meta.num_elements, 10);
+
+        // Check that each buffer has been initialized
         let frac_flagged = state
             .frac_flagged
             .get()
             .ok_or("error getting `frac_flagged`")?;
-        assert_eq!(frac_flagged.len(), 1);
 
         let sktilde_avg = state
             .sktilde_avg
             .get()
             .ok_or("error getting `sktilde_avg`")?;
-        assert_eq!(sktilde_avg.len(), 1);
 
         let bad_feed_counts = state
             .bad_feed_counts
             .get()
             .ok_or("error getting `bad_feed_counts`")?;
+
+        // Check that each buffer has the correct shape
+        assert_eq!(*frac_flagged.shape(), [4]);
+        assert_eq!(*sktilde_avg.shape(), [4]);
+        assert_eq!(*bad_feed_counts.shape(), [4, 10]);
+
+        // Check that a complete frame has been pushed to each buffer
+        assert_eq!(frac_flagged.len(), 1);
+        assert_eq!(frac_flagged.queue_len(), 0);
+
+        assert_eq!(sktilde_avg.len(), 1);
+        assert_eq!(sktilde_avg.queue_len(), 0);
+
         assert_eq!(bad_feed_counts.len(), 1);
+        assert_eq!(bad_feed_counts.queue_len(), 0);
 
         Ok(())
     }

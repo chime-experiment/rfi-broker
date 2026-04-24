@@ -274,6 +274,16 @@ where
         self.frames.lock().len()
     }
 
+    /// Get the number of frames in the buffer queue.
+    pub fn queue_len(&self) -> usize {
+        self.partial_frames.lock().len()
+    }
+
+    /// Get the buffer frame shape
+    pub const fn shape(&self) -> &Vec<usize> {
+        &self.frame_shape
+    }
+
     /// Return an `N+1` dimensional [`ArrayD`] stacked over an axis, or `None`
     /// if no frames available.
     ///

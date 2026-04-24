@@ -56,17 +56,17 @@ impl DataState {
 
         // Push to each ringbuffer, initializing if this is the first push
         self.frac_flagged
-            .get_or_init(|| RingBuffer::<f32>::new(vec![header.num_local_freq as usize]))
+            .get_or_init(|| RingBuffer::<f32>::new(vec![header.num_total_freq as usize]))
             .push_vec(body.frac_flagged, id, &indices, axis)?;
 
         self.sktilde_avg
-            .get_or_init(|| RingBuffer::<f32>::new(vec![header.num_local_freq as usize]))
+            .get_or_init(|| RingBuffer::<f32>::new(vec![header.num_total_freq as usize]))
             .push_vec(body.sktilde_avg, id, &indices, axis)?;
 
         self.bad_feed_counts
             .get_or_init(|| {
                 RingBuffer::<u8>::new(vec![
-                    header.num_local_freq as usize,
+                    header.num_total_freq as usize,
                     header.num_elements as usize,
                 ])
             })
@@ -100,8 +100,8 @@ mod tests {
         let mut packet = crate::packet::Packet::default();
 
         // Just push single chunks for now. Packet fixture uses
-        for chunk in 0..2 {
-            packet = test_fixtures::packet(vec![chunk]);
+        for i in (0..4).step_by(2) {
+            packet = test_fixtures::packet(vec![i, i + 1]);
             state.push(packet.clone())?;
         }
 
@@ -115,7 +115,7 @@ mod tests {
         let meta = state.metadata.get().ok_or("error getting metadata")?;
         meta.lock().check_expected_equal(&packet.header)?;
 
-        // Check that each buffer has expected shape
+        // Check that each buffer has expected number of frames (1)
         let frac_flagged = state
             .frac_flagged
             .get()

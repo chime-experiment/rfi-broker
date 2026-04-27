@@ -12,7 +12,7 @@ use sunrise::{Coordinates, SolarDay, SolarEvent};
 use reqwest::Client;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 
-use eyre::{OptionExt, Report, WrapErr, eyre};
+use eyre::{OptionExt, WrapErr, bail, eyre};
 
 use serde_json::json;
 
@@ -64,17 +64,6 @@ fn solar_noon(coord: Coordinates, altitude: f64, days_offset: i64) -> Option<Dat
     DateTime::<Utc>::from_timestamp(i64::midpoint(rise, set), 0)
 }
 
-/// Error handling for event tasks.
-#[derive(Debug, thiserror::Error)]
-pub enum PostError {
-    /// Network/connection failure
-    #[error("client request failed")]
-    Request(#[from] Report),
-    /// Bad status
-    #[error("bad status {status}: {body}")]
-    BadStatus { status: u16, body: String },
-}
-
 /// Send an enable/disable event to the zeroing endpoint.
 async fn post_event(
     client: &Client,
@@ -82,7 +71,7 @@ async fn post_event(
     endpoint: &str,
     target: &str,
     enable: bool,
-) -> Result<reqwest::StatusCode, PostError> {
+) -> eyre::Result<reqwest::StatusCode> {
     let payload = json!({target: enable});
 
     let result = client
@@ -96,12 +85,12 @@ async fn post_event(
     let status = result.status();
 
     if !status.is_success() {
-        return Err(PostError::BadStatus {
-            status: status.as_u16(),
-            body: status
+        bail!(
+            "Bad status: {status}, reason: {}",
+            status
                 .canonical_reason()
-                .map_or("null".into(), std::string::ToString::to_string),
-        });
+                .map_or("null".into(), std::string::ToString::to_string)
+        );
     }
 
     Ok(status)
@@ -123,8 +112,9 @@ async fn post_event(
 /// Intended to be run with [`tokio::spawn`]. Since this is an async
 /// task, it will almost never consume resources.
 ///
-/// # Panics
-/// Panics if the solar noon estimation fails.
+/// # Errors
+/// Errors if computing solar noon fails, or the telescope coordinates
+/// are invalid.
 pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) -> eyre::Result<()> {
     let (Some(telescope), Some(zeroing)) = (&config.telescope, &config.zeroing) else {
         tracing::info!("solar event config not set - task going into permanent idle");
@@ -179,7 +169,7 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) -
             tokio::time::sleep(t).await;
             // Send the second-stage event first
             tracing::debug!("Sending second-stage `disable` event...");
-            match post_event(
+            post_event(
                 &client,
                 &headers,
                 &second_stage_addr,
@@ -187,25 +177,16 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) -
                 false,
             )
             .await
-            {
-                Ok(_) => metrics.rfi_zeroing.set_second(false),
-                Err(PostError::BadStatus { status, body }) => {
-                    tracing::warn!(%status, %body);
-                }
-                Err(PostError::Request(report)) => {
-                    tracing::error!(error = ?report);
-                }
-            }
+            .inspect(|_| metrics.rfi_zeroing.set_second(false))
+            .inspect_err(|err| tracing::error!(error = ?err))
+            .ok();
+
             tracing::debug!("Second first-stage `disable` event...");
-            match post_event(&client, &headers, &first_stage_addr, &zeroing.target, true).await {
-                Ok(_) => metrics.rfi_zeroing.set_first(false),
-                Err(PostError::BadStatus { status, body }) => {
-                    tracing::warn!(%status, %body);
-                }
-                Err(PostError::Request(report)) => {
-                    tracing::error!(error = ?report);
-                }
-            }
+            post_event(&client, &headers, &first_stage_addr, &zeroing.target, true)
+                .await
+                .inspect(|_| metrics.rfi_zeroing.set_first(false))
+                .inspect_err(|err| tracing::error!(error = ?err))
+                .ok();
         }
 
         // Sleep until the next enable event. If the even has passed, we still want
@@ -222,29 +203,21 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) -
 
         // Send the first-stage event first
         tracing::debug!("Sending first-stage `enable` event...");
-        match post_event(&client, &headers, &first_stage_addr, &zeroing.target, true).await {
-            Ok(_) => metrics.rfi_zeroing.set_first(true),
-            Err(PostError::BadStatus { status, body }) => {
-                tracing::warn!(%status, %body);
-            }
-            Err(PostError::Request(report)) => {
-                tracing::error!(error = ?report);
-            }
-        }
+        post_event(&client, &headers, &first_stage_addr, &zeroing.target, true)
+            .await
+            .inspect(|_| metrics.rfi_zeroing.set_first(true))
+            .inspect_err(|err| tracing::error!(error = ?err))
+            .ok();
+
         tracing::debug!("Second second-stage `enable` event...");
-        match post_event(&client, &headers, &second_stage_addr, &zeroing.target, true).await {
-            Ok(_) => metrics.rfi_zeroing.set_second(true),
-            Err(PostError::BadStatus { status, body }) => {
-                tracing::warn!(%status, %body);
-            }
-            Err(PostError::Request(report)) => {
-                tracing::error!(error = ?report);
-            }
-        }
-        // Get the next solar noon window. Have to use this extra variable assignment
-        // because rust doesn't let us use attributes on expressions
-        let try_next_noon =
+        post_event(&client, &headers, &second_stage_addr, &zeroing.target, true)
+            .await
+            .inspect(|_| metrics.rfi_zeroing.set_second(true))
+            .inspect_err(|err| tracing::error!(error = ?err))
+            .ok();
+
+        // Get the next solar noon window
+        next_noon =
             solar_noon(coords, telescope.altitude, 1).ok_or_eyre("failed to compute solar noon")?;
-        next_noon = try_next_noon;
     }
 }

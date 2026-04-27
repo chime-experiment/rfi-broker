@@ -31,6 +31,9 @@ use crate::packet::Packet;
 const UDP_BUF_SIZE_MB: usize = 8;
 
 /// Middleware to emit a debug message every time an endpoint is triggered.
+///
+/// Only available in debug build.
+#[cfg(debug_assertions)]
 async fn debug_log_middleware(
     req: axum::http::Request<axum::body::Body>,
     next: Next,

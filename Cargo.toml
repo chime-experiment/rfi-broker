@@ -19,7 +19,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 socket2 = "0.6.3"
 sunrise = "3.0.0"
-thiserror = "2.0.18"
 tokio = { version = "1", features = ["full"] }
 tracing = { version = "0.1.44", features = ["release_max_level_info"] }
 tracing-journald = "0.3.2"
@@ -32,6 +31,10 @@ tracing-test = "0.2.6"
 opt-level = 3
 codegen-units = 1
 lto = "fat"
+
+[profile.release-with-debug-info]
+inherits = "release"
+debug-assertions = true
 
 [lints.clippy]
 # Enable all pedantic warnings

@@ -98,13 +98,12 @@ pub async fn metrics(State(m): State<SharedMetrics>) -> impl IntoResponse {
 /// Can return any error which occurs while computing the metric.
 ///
 /// Required for external compatibility.
-pub async fn dump_bad_input_likelihood(State(state): State<SharedDataState>) -> String {
-    let metric = compute_bad_input_likelihood(&state);
+pub async fn dump_bad_input_likelihood(
+    State(state): State<SharedDataState>,
+) -> Result<String, (StatusCode, String)> {
+    let metric = compute_bad_input_likelihood(&state).map_err(handler_err)?;
 
-    match metric {
-        Ok(metric) => format!("rfi_bad_input_mask = {metric}"),
-        Err(e) => e.to_string(),
-    }
+    Ok(format!("rfi_bad_input_mask = {metric:#?}"))
 }
 
 /// `GET /inputs` - likelihood that any given input is corrupted.

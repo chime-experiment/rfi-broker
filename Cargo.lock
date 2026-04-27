@@ -1588,7 +1588,6 @@ dependencies = [
  "serde_json",
  "socket2",
  "sunrise",
- "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-journald",

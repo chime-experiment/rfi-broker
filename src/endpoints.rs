@@ -1,7 +1,7 @@
 //! Axum endpoints and associated functions.
+use std::fmt::Write;
 
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
-use serde_json::json;
 
 use eyre::{OptionExt, bail};
 
@@ -27,80 +27,68 @@ pub async fn metadata(State(state): State<SharedDataState>) -> impl IntoResponse
     Ok::<_, (StatusCode, String)>(Json(meta))
 }
 
-/// `GET /data` — snapshot of all dataset ring buffers.
+/// Return an error as an ``INTERNAL_SERVER_ERROR``.
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "error will always be consumed"
+)]
+fn handler_err(e: impl ToString) -> (StatusCode, String) {
+    (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+}
+
+/// `GET /data` — snapshot most recent frame in all dataset ring buffers.
 ///
-/// Returns `500` if serialisation of any frame fails.
-pub async fn data(State(state): State<SharedDataState>) -> impl IntoResponse {
-    let mut result = serde_json::Map::new();
+/// Only exists in debug builds
+#[cfg(debug_assertions)]
+pub async fn data(State(state): State<SharedDataState>) -> Result<String, (StatusCode, String)> {
+    let mut out = String::new();
 
     // Dump all the current buffers
     if let Some(frac_flagged) = state.frac_flagged.get() {
-        let len = frac_flagged.len();
-        let shape = frac_flagged.shape();
-        let queue_len = frac_flagged.queue_len();
-        let frac_flagged = frac_flagged
-            .serialize()
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        writeln!(out, "-- frac_flagged --").map_err(handler_err)?;
+        writeln!(out, "  frame_count : {:?}", frac_flagged.len()).map_err(handler_err)?;
+        writeln!(out, "  frames_in_queue : {:?}", frac_flagged.queue_len()).map_err(handler_err)?;
+        writeln!(out, "  frame_shape : {:?}", frac_flagged.shape()).map_err(handler_err)?;
 
-        result.insert(
-            "frac_flagged".into(),
-            json!({
-                "frame_count": len,
-                "frames_in_queue": queue_len,
-                "frame_shape": shape,
-                "frames": frac_flagged
-            }),
-        );
+        if let Some(frame) = frac_flagged.last() {
+            writeln!(out, "{frame:#?}").map_err(handler_err)?;
+        }
+        writeln!(out).map_err(handler_err)?; // blank line
     }
 
     if let Some(sktilde_avg) = state.sktilde_avg.get() {
-        let len = sktilde_avg.len();
-        let shape = sktilde_avg.shape();
-        let queue_len = sktilde_avg.queue_len();
-        let sktilde_avg = sktilde_avg
-            .serialize()
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        writeln!(out, "-- sktilde_avg --").map_err(handler_err)?;
+        writeln!(out, "  frame_count : {:?}", sktilde_avg.len()).map_err(handler_err)?;
+        writeln!(out, "  frames_in_queue : {:?}", sktilde_avg.queue_len()).map_err(handler_err)?;
+        writeln!(out, "  frame_shape : {:?}", sktilde_avg.shape()).map_err(handler_err)?;
 
-        result.insert(
-            "sktilde_avg".into(),
-            json!({
-                "frame_count": len,
-                "frames_in_queue": queue_len,
-                "frame_shape": shape,
-                "frames": sktilde_avg
-            }),
-        );
+        if let Some(frame) = sktilde_avg.last() {
+            writeln!(out, "{frame:#?}").map_err(handler_err)?;
+        }
+        writeln!(out).map_err(handler_err)?;
     }
 
     if let Some(bad_feed_counts) = state.bad_feed_counts.get() {
-        let len = bad_feed_counts.len();
-        let shape = bad_feed_counts.shape();
-        let queue_len = bad_feed_counts.queue_len();
-        let bad_feed_counts = bad_feed_counts
-            .serialize()
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        writeln!(out, "-- bad_feed_counts --").map_err(handler_err)?;
+        writeln!(out, "  frame_count : {:?}", bad_feed_counts.len()).map_err(handler_err)?;
+        writeln!(out, "  frames_in_queue : {:?}", bad_feed_counts.queue_len())
+            .map_err(handler_err)?;
+        writeln!(out, "  frame_shape : {:?}", bad_feed_counts.shape()).map_err(handler_err)?;
 
-        result.insert(
-            "bad_feed_counts".into(),
-            json!({
-                "frame_count": len,
-                "frames_in_queue": queue_len,
-                "frame_shape": shape,
-                "frames": bad_feed_counts
-            }),
-        );
+        if let Some(frame) = bad_feed_counts.last() {
+            writeln!(out, "{frame:#?}").map_err(handler_err)?;
+        }
+        writeln!(out).map_err(handler_err)?;
     }
 
-    Ok::<_, (StatusCode, String)>(Json(result))
+    Ok(out)
 }
 
 /// `GET /metrics` - dumps the current prometheus metrics.
 ///
 /// Returns `500` if serialisation fails.
 pub async fn metrics(State(m): State<SharedMetrics>) -> impl IntoResponse {
-    let metrics = m
-        .serialize()
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let metrics = m.serialize().map_err(handler_err)?;
 
     Ok::<_, (StatusCode, String)>(Json(metrics))
 }
@@ -134,15 +122,12 @@ pub async fn get_bad_input_likelihood(
 
             result.insert(
                 "bad_input_likelihood".into(),
-                serde_json::to_value(&metric)
-                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+                serde_json::to_value(&metric).map_err(handler_err)?,
             );
 
             Ok::<_, (StatusCode, String)>(Json(result))
         }
-        Err(e) => {
-            Err::<_, (StatusCode, String)>((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-        }
+        Err(e) => Err(handler_err(e)),
     }
 }
 

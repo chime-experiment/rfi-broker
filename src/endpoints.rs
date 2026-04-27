@@ -5,7 +5,7 @@ use serde_json::json;
 
 use eyre::{OptionExt, bail};
 
-use ndarray::{Array, Array2, ArrayD, ArrayView, ArrayViewD, Axis, Dimension, RemoveAxis};
+use ndarray::{Array, Array2, ArrayD, ArrayView, Axis, Dimension, RemoveAxis};
 
 use crate::datastate::SharedDataState;
 use crate::metrics::SharedMetrics;
@@ -171,8 +171,8 @@ fn compute_bad_input_likelihood(state: &SharedDataState) -> eyre::Result<ArrayD<
     // Compute the per-feed likelihood metric. This is guaranteed
     // to succeed because call to `&buf.stack` above would have
     // failed if the array was empty
-    let mean_val = masked_mean_first_axis(arr, mask)?;
-    let mut median: ArrayD<f64> = median_axis(&mean_val.view(), Axis(0));
+    let mean_val = masked_sum_mean(arr, mask);
+    let mut median = median_axis(&mean_val.view(), Axis(0));
 
     // Convert to a percentage and normalize by the number of frames per packet
     let meta = state
@@ -190,27 +190,35 @@ fn compute_bad_input_likelihood(state: &SharedDataState) -> eyre::Result<ArrayD<
 ///
 /// The mask must be two-dimensional, with axes matching the first and
 /// last axes of `arr`.
-fn masked_mean_first_axis(arr: &ArrayD<u8>, mask: &Array2<u8>) -> eyre::Result<ArrayD<u32>> {
-    let sum: ArrayD<u32> = arr.mapv(u32::from).sum_axis(Axis(arr.ndim() - 1));
-    let norm = mask.mapv(u32::from).sum_axis(Axis(1));
+fn masked_sum_mean(arr: &ArrayD<u8>, mask: &Array2<u8>) -> ArrayD<f32> {
+    // Max buffer length is 64, so can guarantee that accumulating
+    // to u16 will not overflow
+    let sum: ArrayD<u16> =
+        // `as_standard_layout` is zero-copy if `arr` is c-contiguous, but
+        // provides guarantees to the compiler about axis contiguousness
+        arr.as_standard_layout()
+            .fold_axis(Axis(arr.ndim() - 1), 0u16, |&acc, &x| acc + u16::from(x));
+    // compute the norm directly as the float reciprocal
+    let norm: Array2<f32> = mask
+        .as_standard_layout()
+        .mapv(u16::from)
+        .sum_axis(Axis(1))
+        .mapv(|x| {
+            // Only invert if norm is non-zero. In theory, LLVM should
+            // convert this to a branchless instruction
+            if x == 0 {
+                0.0f32
+            } else {
+                1.0f32 / f32::from(x)
+            }
+        })
+        .insert_axis(Axis(1));
 
-    let mean_val: Vec<ArrayD<u32>> = sum
-        .axis_iter(Axis(0))
-        .zip(norm.iter())
-        .filter(|(_, val)| **val > 0_u32)
-        .map(|(slice, &val)| &slice / val)
-        .collect();
-
-    // Convert to views and stack
-    let mean_val: Vec<ArrayViewD<u32>> = mean_val.iter().map(|x| x.view()).collect();
-
-    let stack = ndarray::stack(Axis(0), &mean_val)?;
-
-    Ok(stack)
+    sum.mapv(f32::from) * &norm
 }
 
 /// Compute the median of an array across an arbitrary axis.
-fn median_axis<D>(arr: &ArrayView<u32, D>, axis: Axis) -> Array<f64, D::Smaller>
+fn median_axis<D>(arr: &ArrayView<f32, D>, axis: Axis) -> Array<f64, D::Smaller>
 where
     D: Dimension + RemoveAxis,
 {

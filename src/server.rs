@@ -3,8 +3,10 @@
 //! # Endpoints
 //! - ``metadata``: Most recent packet header metadata
 //! - ``metrics``: Application prometheus metrics
-//! - ``data``: Dump all ringbuffers
 //! - ``bad_input_likelihood``: per-input likelihood of a feed being corrupted
+//!
+//! # Debug endpoints
+//! - ``data``: Pretty print of most recent buffer frame
 
 use std::io::ErrorKind::WouldBlock;
 use std::net::SocketAddr;
@@ -36,12 +38,12 @@ async fn debug_log_middleware(
     tracing::debug!(
         method = %req.method(),
         uri = %req.uri(),
-        "-> incoming request"
+        "-> request:"
     );
 
     let response = next.run(req).await;
 
-    tracing::debug!(status = %response.status(), "<- outgoing response");
+    tracing::debug!(status = %response.status(), "<- response:");
 
     response
 }
@@ -53,24 +55,31 @@ async fn debug_log_middleware(
 fn make_router(state: SharedDataState, metrics: SharedMetrics) -> Router {
     // router using information from the data state
     let state_router = Router::new()
-        .route("/data", get(endpoints::data))
         .route("/metadata", get(endpoints::metadata))
         .route(
             "/bad_input_likelihood",
             get(endpoints::get_bad_input_likelihood),
         )
-        .route("/", get(endpoints::dump_bad_input_likelihood))
-        .with_state(state);
+        .route("/", get(endpoints::dump_bad_input_likelihood));
+
+    // debug-only endpoints
+    #[cfg(debug_assertions)]
+    let state_router = state_router.route("/data", get(endpoints::data));
+
+    // Include the state
+    let state_router = state_router.with_state(state);
 
     // router for metrics
     let metrics_router = Router::new()
         .route("/metrics", get(endpoints::metrics))
         .with_state(metrics);
 
-    Router::new()
-        .merge(state_router)
-        .merge(metrics_router)
-        .layer(middleware::from_fn(debug_log_middleware))
+    let router = Router::new().merge(state_router).merge(metrics_router);
+
+    #[cfg(debug_assertions)]
+    let router = router.layer(middleware::from_fn(debug_log_middleware));
+
+    router
 }
 
 /// Construct a UDP socket with a buffer large enough to handle burst events.

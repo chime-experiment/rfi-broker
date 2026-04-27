@@ -11,7 +11,6 @@ use parking_lot::Mutex;
 use std::collections::{BTreeMap, VecDeque};
 
 use serde::Serialize;
-use serde_json::Value;
 
 use eyre::{WrapErr, bail, eyre};
 
@@ -128,6 +127,7 @@ pub struct RingBuffer<T> {
     frames: Mutex<VecDeque<Frame<T>>>,
 }
 
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
 impl<T> RingBuffer<T>
 where
     T: Num + Clone,
@@ -317,21 +317,6 @@ where
             .collect();
 
         ndarray::Array2::<u8>::from_shape_vec((nrows, ncols), flat_vec).ok()
-    }
-}
-
-impl<T> RingBuffer<T>
-where
-    T: Num + Clone + Serialize,
-{
-    /// Serialize.
-    pub fn serialize(&self) -> Result<Vec<Value>, serde_json::Error> {
-        let snapshot: Vec<Frame<T>> = self.snapshot();
-
-        snapshot
-            .into_iter()
-            .map(|f| serde_json::to_value(&f))
-            .collect()
     }
 }
 

@@ -103,7 +103,13 @@ pub async fn dump_bad_input_likelihood(
 ) -> Result<String, (StatusCode, String)> {
     let metric = compute_bad_input_likelihood(&state).map_err(handler_err)?;
 
-    Ok(format!("rfi_bad_input_mask = {metric:#?}"))
+    let metric_fmt = metric
+        .iter()
+        .map(|x| format!("{x:.2}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    Ok(format!("rfi_bad_input_mask = [{metric_fmt}]\n"))
 }
 
 /// `GET /inputs` - likelihood that any given input is corrupted.
@@ -177,14 +183,9 @@ fn compute_bad_input_likelihood(state: &SharedDataState) -> eyre::Result<ArrayD<
 fn masked_sum_mean(arr: &ArrayD<u8>, mask: &Array2<u8>) -> ArrayD<f32> {
     // Max buffer length is 64, so can guarantee that accumulating
     // to u16 will not overflow
-    let sum: ArrayD<u16> =
-        // `as_standard_layout` is zero-copy if `arr` is c-contiguous, but
-        // provides guarantees to the compiler about axis contiguousness
-        arr.as_standard_layout()
-            .fold_axis(Axis(arr.ndim() - 1), 0u16, |&acc, &x| acc + u16::from(x));
+    let sum: ArrayD<u16> = arr.fold_axis(Axis(arr.ndim() - 1), 0u16, |&acc, &x| acc + u16::from(x));
     // compute the norm directly as the float reciprocal
     let norm: Array2<f32> = mask
-        .as_standard_layout()
         .mapv(u16::from)
         .sum_axis(Axis(1))
         .mapv(|x| {
@@ -198,6 +199,7 @@ fn masked_sum_mean(arr: &ArrayD<u8>, mask: &Array2<u8>) -> ArrayD<f32> {
         })
         .insert_axis(Axis(1));
 
+    // Normalise to get masked mean
     sum.mapv(f32::from) * &norm
 }
 

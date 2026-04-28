@@ -34,6 +34,7 @@ lto = "fat"
 
 [profile.release-with-debug-info]
 inherits = "release"
+lto = "thin"
 debug-assertions = true
 
 [lints.clippy]

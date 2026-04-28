@@ -107,6 +107,7 @@ impl Packet {
     ///
     /// # Errors
     /// Errors if writing fails.
+    #[cfg(test)]
     pub fn to_vec(&self) -> eyre::Result<Vec<u8>> {
         let mut cursor = Cursor::new(Vec::new());
 

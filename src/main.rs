@@ -11,6 +11,18 @@ use eyre::WrapErr;
 
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
+mod config;
+mod datastate;
+mod endpoints;
+mod events;
+mod metrics;
+mod packet;
+mod ringbuffer;
+mod server;
+
+#[cfg(test)]
+pub(crate) mod test_fixtures;
+
 /// Command-line parser
 #[derive(Parser)]
 #[command(name = "RFI Receiver")]
@@ -66,7 +78,7 @@ fn main() -> eyre::Result<()> {
         .and_then(|p| p.to_str())
         // transpose calls swap the order of Option and Result, with the end effect
         // of propagating errors occuring in `load` to the parent function
-        .and_then(|s| rfi_receiver::config::load(s).transpose())
+        .and_then(|s| config::load(s).transpose())
         .transpose()
         .wrap_err("unable to read config")?;
 
@@ -77,7 +89,7 @@ fn main() -> eyre::Result<()> {
         .enable_all()
         .build()
         .wrap_err("failed to build async runtime")?
-        .block_on(rfi_receiver::server::serve(cli.addr, cli.udp_addr, config))
+        .block_on(server::serve(cli.addr, cli.udp_addr, config))
         .wrap_err("server failed")?;
 
     Ok(())

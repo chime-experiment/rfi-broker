@@ -161,7 +161,7 @@ fn compute_bad_input_likelihood(state: &SharedDataState) -> eyre::Result<ArrayD<
     // Compute the per-feed likelihood metric. This is guaranteed
     // to succeed because call to `&buf.stack` above would have
     // failed if the array was empty
-    let mean_val = masked_sum_mean(arr, mask);
+    let mean_val = masked_mean_last_axis(arr, mask);
     let mut median = median_axis(&mean_val.view(), Axis(0));
 
     // Convert to a percentage and normalize by the number of frames per packet
@@ -180,7 +180,7 @@ fn compute_bad_input_likelihood(state: &SharedDataState) -> eyre::Result<ArrayD<
 ///
 /// The mask must be two-dimensional, with axes matching the first and
 /// last axes of `arr`.
-fn masked_sum_mean(arr: &ArrayD<u8>, mask: &Array2<u8>) -> ArrayD<f32> {
+fn masked_mean_last_axis(arr: &ArrayD<u8>, mask: &Array2<u8>) -> ArrayD<f32> {
     // Max buffer length is 64, so can guarantee that accumulating
     // to u16 will not overflow
     let sum: ArrayD<u16> = arr.fold_axis(Axis(arr.ndim() - 1), 0u16, |&acc, &x| acc + u16::from(x));
@@ -230,4 +230,40 @@ where
             upper
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_abs_diff_eq;
+    use ndarray::s;
+
+    /// Test that the ``masked_mean_last_axis`` produces an expected value.
+    #[test]
+    fn test_masked_mean_last_axis() {
+        let mut data = ArrayD::<u8>::ones(ndarray::IxDyn(&[3, 5, 12]));
+        let mut mask = Array2::<u8>::ones([3, 12]);
+
+        // check that the unmasked mean is as-expected
+        let mean_val = masked_mean_last_axis(&data, &mask);
+        let expected = ArrayD::<f32>::ones(mean_val.raw_dim());
+        // in the unmasked case, these should be the same
+        let expected_mean_axis = data.mapv(f32::from).mean_axis(Axis(2)).unwrap();
+
+        assert_abs_diff_eq!(mean_val, expected, epsilon = 1e-8);
+        assert_abs_diff_eq!(mean_val, expected_mean_axis, epsilon = 1e-8);
+
+        // zero out part of the mask and make sure the new mean is correct
+        mask.slice_mut(s![.., 3..5]).fill(0u8);
+        data.slice_mut(s![.., .., 3..5]).fill(0u8);
+
+        let mean_val = masked_mean_last_axis(&data, &mask);
+        // The unmasked mean should be smaller than the masked mean by a
+        // factor of 1/6
+        let expected_mean_axis = data.mapv(f32::from).mean_axis(Axis(2)).unwrap() + (1.0_f32 / 6.0);
+
+        // masked mean should still be 1.0
+        assert_abs_diff_eq!(mean_val, expected, epsilon = 1e-8);
+        assert_abs_diff_eq!(mean_val, expected_mean_axis, epsilon = 1e-8);
+    }
 }

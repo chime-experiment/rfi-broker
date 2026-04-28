@@ -296,7 +296,7 @@ where
         // Grab a snapshot of the current buffer and relase lock
         let snapshot: Vec<Frame<T>> = self.snapshot();
         // `stack` requires views
-        let views: Vec<_> = snapshot.iter().map(|f| f.array.view()).collect();
+        let views: Vec<ArrayViewD<T>> = snapshot.iter().map(|f| f.array.view()).collect();
 
         let ax = axis.into().map_or(Axis(self.frame_shape.len()), Axis);
 

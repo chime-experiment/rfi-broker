@@ -238,7 +238,7 @@ mod tests {
     use approx::assert_abs_diff_eq;
     use ndarray::s;
 
-    /// Test that the ``masked_mean_last_axis`` produces an expected value.
+    /// Test that ``masked_mean_last_axis`` produces expectation.
     #[test]
     fn test_masked_mean_last_axis() {
         let mut data = ArrayD::<u8>::ones(ndarray::IxDyn(&[3, 5, 12]));
@@ -265,5 +265,39 @@ mod tests {
         // masked mean should still be 1.0
         assert_abs_diff_eq!(mean_val, expected, epsilon = 1e-8);
         assert_abs_diff_eq!(mean_val, expected_mean_axis, epsilon = 1e-8);
+    }
+
+    /// Test that ``median_axis`` produces expectation for odd-length array.
+    #[test]
+    fn test_median_axis_odd() {
+        // Test the odd-length case first
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "values too small for precision loss"
+        )]
+        // Use multiple rows to ensure that axis mapping is correct
+        let data = ArrayD::from_shape_fn(ndarray::IxDyn(&[3, 13, 11]), |idx| idx[2] as f32);
+        let medval = median_axis(&data.view(), Axis(2));
+
+        let expected = ArrayD::<f64>::from_elem(medval.raw_dim(), 5.0_f64);
+
+        assert_abs_diff_eq!(medval, expected, epsilon = 1e-8);
+    }
+
+    /// Test that ``median_axis`` produces expectation for even-length array.
+    #[test]
+    fn test_median_axis_even() {
+        // Test the odd-length case first
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "values too small for precision loss"
+        )]
+        // Use multiple rows to ensure that axis mapping is correct
+        let data = ArrayD::from_shape_fn(ndarray::IxDyn(&[3, 13, 10]), |idx| idx[2] as f32);
+        let medval = median_axis(&data.view(), Axis(2));
+
+        let expected = ArrayD::<f64>::from_elem(medval.raw_dim(), 4.5_f64);
+
+        assert_abs_diff_eq!(medval, expected, epsilon = 1e-8);
     }
 }

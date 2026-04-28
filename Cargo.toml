@@ -26,6 +26,8 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [dev-dependencies]
 tracing-test = "0.2.6"
+ndarray = { version = "0.17.2", features = ["approx"] }
+approx = "0.5"
 
 [profile.release]
 opt-level = 3

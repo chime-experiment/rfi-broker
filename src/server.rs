@@ -14,11 +14,10 @@ use std::sync::Arc;
 
 use eyre::WrapErr;
 
-use axum::{
-    Router,
-    middleware::{self, Next},
-    routing::get,
-};
+#[cfg(debug_assertions)]
+use axum::middleware::{self, Next};
+use axum::{Router, routing::get};
+
 use tokio::net::{TcpListener, UdpSocket};
 
 use crate::config::AppConfig;
@@ -99,9 +98,9 @@ async fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Error> {
         reason = "buffer size should never be large enough to cause precision loss"
     )]
     let actual = sock_ref.recv_buffer_size()? as f64 / 1024_f64 / 1024_f64;
-    tracing::debug!("Requested {UDP_BUF_SIZE_MB}MB recv buffer, got {actual}MB");
+    tracing::debug!("requested {UDP_BUF_SIZE_MB}MB recv buffer, got {actual}MB");
 
-    tracing::info!("UDP socket listening on {addr}");
+    tracing::info!(addr = ?addr, "created UDP socket");
 
     Ok(socket)
 }
@@ -141,13 +140,13 @@ async fn packet_handler_task(
                         // failed to push to the data state
                         Err(e) => {
                             metrics.packet_loss.inc_lost();
-                            tracing::warn!("Error pushing packet to state: {:#?}", e);
+                            tracing::warn!(error = ?e, "error pushing packet to shared state");
                         }
                     },
                     // failed to parse the packet
                     Err(e) => {
                         metrics.packet_loss.inc_lost();
-                        tracing::warn!("Error parsing packet: {:#?}", e);
+                        tracing::warn!(error = ?e, "error parsing received packet");
                     }
                 },
                 // no packet available - release the thread
@@ -157,7 +156,7 @@ async fn packet_handler_task(
                 // error occured during UDP read
                 Err(e) => {
                     metrics.packet_loss.inc_lost();
-                    tracing::debug!("UDP recv error: {:#?}", e);
+                    tracing::debug!(error = ?e, "UDP recv error");
                 }
             }
         }
@@ -181,7 +180,7 @@ pub async fn serve(
     // Start the solar event task, if a config was provided
     let solar = config.map_or_else(
         || {
-            tracing::info!("Solar zeroing disabled - no config was provided.");
+            tracing::info!("solar zeroing disabled - no config was provided");
             tokio::spawn(std::future::pending()) // never resolves, effectively disabled
         },
         |cfg| {
@@ -205,11 +204,8 @@ pub async fn serve(
     let http_listener = TcpListener::bind(http_addr).await?;
 
     let http = tokio::spawn(axum::serve(http_listener, make_router(state, metrics)).into_future());
-    tracing::info!("HTTP listening on {http_addr}");
+    tracing::info!(addr = ?http_addr, "started HTTP server");
 
-    // NB: each task will shut down right away if any task fails. This is mostly fine,
-    // but it would result in an undesirable zeroing state
-    // TODO: make the zeroing task more robust to failures
     tokio::select! {
         result = packet_handler => result?.wrap_err("packet handler failed"),
         result = http => result?.wrap_err("http server failed"),

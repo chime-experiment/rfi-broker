@@ -11,6 +11,7 @@
 
 use std::sync::{Arc, OnceLock};
 
+use eyre::OptionExt;
 use parking_lot::Mutex;
 
 use crate::packet::{Body, Header, Packet};
@@ -70,8 +71,10 @@ impl DataState {
             .push_vec(body.bad_feed_counts, id, &indices, axis)?;
 
         // Update the metadata since we got here
-        #[allow(clippy::unwrap_used, reason = "metadata guaranteed to exist")]
-        let meta = self.metadata.get().unwrap();
+        let meta = self
+            .metadata
+            .get()
+            .ok_or_eyre("unexpected failure accessing existing metadata")?;
         *meta.lock() = header;
 
         Ok(id)

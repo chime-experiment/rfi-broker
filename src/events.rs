@@ -110,7 +110,9 @@ async fn post_event(
 /// 5. Compute the next solar noon.
 ///
 /// Intended to be run with [`tokio::spawn`]. Since this is an async
-/// task, it will almost never consume resources.
+/// task, it will almost never consume resources. If no config is provided,
+/// that task runs as an indefinitely-pending future which will never
+/// resolve or consume resources.
 ///
 /// # Errors
 /// Errors if computing solar noon fails, or the telescope coordinates
@@ -124,9 +126,9 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) -
     };
 
     tracing::info!(
-        "Running solar task for telescope\n{:#?} with endpoint parameters\n{:#?}",
-        telescope,
-        zeroing
+        telescope = ?telescope,
+        zeroing = ?zeroing,
+        "solar RFI zeroing task started",
     );
     // Construct the addresses only once
     let first_stage_addr = format!("https://{}/{}", &zeroing.hostname, &zeroing.first_stage);
@@ -162,13 +164,13 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) -
         let next_event_start = next_noon.timestamp() - zeroing.downtime.cast_signed() / 2;
         let next_event_end = next_event_start + zeroing.downtime.cast_signed();
 
-        tracing::info!("Next solar noon window at {next_noon}");
+        tracing::info!("next solar noon window at {next_noon}");
 
         // Sleep until the next zeroing disable event
         if let Some(t) = seconds_until(next_event_start) {
             tokio::time::sleep(t).await;
             // Send the second-stage event first
-            tracing::debug!("Sending second-stage `disable` event...");
+            tracing::debug!("sending second-stage `disable` event...");
             post_event(
                 &client,
                 &headers,
@@ -178,14 +180,18 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) -
             )
             .await
             .inspect(|_| metrics.rfi_zeroing.set_second(false))
-            .inspect_err(|err| tracing::error!(error = ?err))
+            .inspect_err(
+                |err| tracing::warn!(error = ?err, "failed to disable second-stage zeroing"),
+            )
             .ok();
 
-            tracing::debug!("Second first-stage `disable` event...");
+            tracing::debug!("second first-stage `disable` event...");
             post_event(&client, &headers, &first_stage_addr, &zeroing.target, true)
                 .await
                 .inspect(|_| metrics.rfi_zeroing.set_first(false))
-                .inspect_err(|err| tracing::error!(error = ?err))
+                .inspect_err(
+                    |err| tracing::warn!(error = ?err, "failed to disable first-stage zeroing"),
+                )
                 .ok();
         }
 
@@ -196,24 +202,28 @@ pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) -
             tokio::time::sleep(t).await;
         } else {
             tracing::info!(
-                "Solar noon event time has already passed, but we'll ensure \
+                "solar noon event time has already passed, but we'll ensure \
                 that zeroing is enabled anyway."
             );
         }
 
         // Send the first-stage event first
-        tracing::debug!("Sending first-stage `enable` event...");
+        tracing::debug!("sending first-stage `enable` event...");
         post_event(&client, &headers, &first_stage_addr, &zeroing.target, true)
             .await
             .inspect(|_| metrics.rfi_zeroing.set_first(true))
-            .inspect_err(|err| tracing::error!(error = ?err))
+            .inspect_err(
+                |err| tracing::error!(error = ?err, "failed to enable first-stage zeroing"),
+            )
             .ok();
 
-        tracing::debug!("Second second-stage `enable` event...");
+        tracing::debug!("second second-stage `enable` event...");
         post_event(&client, &headers, &second_stage_addr, &zeroing.target, true)
             .await
             .inspect(|_| metrics.rfi_zeroing.set_second(true))
-            .inspect_err(|err| tracing::error!(error = ?err))
+            .inspect_err(
+                |err| tracing::error!(error = ?err, "failed to enable second-stage zeroing"),
+            )
             .ok();
 
         // Get the next solar noon window

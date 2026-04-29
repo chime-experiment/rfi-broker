@@ -20,6 +20,7 @@ use num_traits::Num;
 /// Maximum number of array frames retained in the ring buffer.
 const RING_CAPACITY: usize = 64;
 const PARTIAL_FRAME_CAPACITY: usize = 8;
+const MIN_FRAME_SAMPLE_COUNT: u64 = 1;
 
 /// Single [`RingBuffer`] frame.
 ///
@@ -192,21 +193,17 @@ where
                     reason = "guarded map is guaranteed to have at least one item"
                 )]
                 let (_, frame) = guard.pop_first().unwrap();
-                // NB: this isn't a great way to do this (should maybe have some sort
-                // of rolling average or something), but it ensures that only frames that
-                // are generally expected to be complete make it into the buffer. The timeout,
-                // then, becomes `PARTIAL_FRAME_CAPACITY * packet_cadence`. However, this
-                // approach introduces a delay equivalent to the full timeout time in the case
-                // where a frame never becomes full.
-                self.lock_push(frame);
-                // if frame.sample_count >= self.last().map_or(0, |f| f.sample_count) {
-                //     self.lock_push(frame);
-                // } else {
-                //     tracing::debug!(
-                //         "Dropped frame with sequence number {} due to missing samples",
-                //         frame.sequence_id
-                //     );
-                // }
+                // Only push frames with a minimum sample count
+                if frame.sample_count >= MIN_FRAME_SAMPLE_COUNT {
+                    self.lock_push(frame);
+                } else {
+                    tracing::debug!(
+                        "Dropped frame with sequence number {} because sample count {} is below \
+                        threshold {MIN_FRAME_SAMPLE_COUNT}",
+                        frame.sequence_id,
+                        frame.sample_count,
+                    );
+                }
             }
             guard.insert(key, new_frame);
         }

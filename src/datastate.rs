@@ -40,9 +40,6 @@ impl DataState {
         let body: Body = packet.body;
         let header: Header = packet.header;
 
-        // Compiles out in release build
-        tracing::debug!("Got packet metadata: {:#?}", header);
-
         // Check that the metadata is as-expected and initialize otherwise
         self.metadata
             .get_or_init(|| Mutex::new(header))

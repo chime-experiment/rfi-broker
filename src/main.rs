@@ -76,11 +76,11 @@ fn main() -> eyre::Result<()> {
         .config
         .as_ref()
         .and_then(|p| p.to_str())
+        .map(config::load)
         // transpose calls swap the order of Option and Result, with the end effect
         // of propagating errors occuring in `load` to the parent function
-        .and_then(|s| config::load(s).transpose())
         .transpose()
-        .wrap_err("unable to read config")?;
+        .wrap_err("failed to read config")?;
 
     tracing::info!("Using {} worker threads", cli.threads);
 

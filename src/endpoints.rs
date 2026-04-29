@@ -51,7 +51,8 @@ pub async fn data(State(state): State<SharedDataState>) -> Result<String, (Statu
         writeln!(out, "  frame_shape : {:?}", frac_flagged.shape()).map_err(handler_err)?;
 
         if let Some(frame) = frac_flagged.last() {
-            writeln!(out, "{frame:#?}").map_err(handler_err)?;
+            writeln!(out, "{:#?}", frame.array).map_err(handler_err)?;
+            writeln!(out, "{:#?}", frame.mask).map_err(handler_err)?;
         }
         writeln!(out).map_err(handler_err)?; // blank line
     }
@@ -63,7 +64,8 @@ pub async fn data(State(state): State<SharedDataState>) -> Result<String, (Statu
         writeln!(out, "  frame_shape : {:?}", sktilde_avg.shape()).map_err(handler_err)?;
 
         if let Some(frame) = sktilde_avg.last() {
-            writeln!(out, "{frame:#?}").map_err(handler_err)?;
+            writeln!(out, "{:#?}", frame.array).map_err(handler_err)?;
+            writeln!(out, "{:#?}", frame.mask).map_err(handler_err)?;
         }
         writeln!(out).map_err(handler_err)?;
     }
@@ -76,7 +78,8 @@ pub async fn data(State(state): State<SharedDataState>) -> Result<String, (Statu
         writeln!(out, "  frame_shape : {:?}", bad_feed_counts.shape()).map_err(handler_err)?;
 
         if let Some(frame) = bad_feed_counts.last() {
-            writeln!(out, "{frame:#?}").map_err(handler_err)?;
+            let favg = frame.array.sum_axis(Axis(1));
+            writeln!(out, "{favg:#?}").map_err(handler_err)?;
         }
         writeln!(out).map_err(handler_err)?;
     }

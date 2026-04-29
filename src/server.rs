@@ -98,9 +98,12 @@ async fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Error> {
         reason = "buffer size should never be large enough to cause precision loss"
     )]
     let actual = sock_ref.recv_buffer_size()? as f64 / 1024_f64 / 1024_f64;
-    tracing::debug!("requested {UDP_BUF_SIZE_MB}MB recv buffer, got {actual}MB");
-
-    tracing::info!(addr = ?addr, "created UDP socket");
+    tracing::info!(
+        addr = ?addr,
+        requested_MB = ?UDP_BUF_SIZE_MB,
+        actual_MB = ?actual,
+        "created UDP socket:",
+    );
 
     Ok(socket)
 }
@@ -204,7 +207,7 @@ pub async fn serve(
     let http_listener = TcpListener::bind(http_addr).await?;
 
     let http = tokio::spawn(axum::serve(http_listener, make_router(state, metrics)).into_future());
-    tracing::info!(addr = ?http_addr, "started HTTP server");
+    tracing::info!(addr = ?http_addr, "started HTTP server:");
 
     tokio::select! {
         result = packet_handler => result?.wrap_err("packet handler failed"),

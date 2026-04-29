@@ -39,22 +39,10 @@ pub type SharedAppConfig = std::sync::Arc<AppConfig>;
 ///
 /// # Errors
 /// Returns [`config:;ConfigError`] if the file can't be read.
-pub fn load(config_path: &str) -> Result<Option<AppConfig>, config::ConfigError> {
+pub fn load(config_path: &str) -> Result<AppConfig, config::ConfigError> {
     // Read and resolve the config file
-    let conf = config::Config::builder()
+    config::Config::builder()
         .add_source(config::File::with_name(config_path))
         .build()?
-        .try_deserialize::<AppConfig>()?;
-
-    // Both config sections must be provided together, but it's ok
-    // for neither to be provided
-    match (&conf.telescope, &conf.zeroing) {
-        (Some(_), Some(_)) => Ok(Some(conf)),
-        (None, None) => Ok(None),
-        _ => Err(config::ConfigError::NotFound(
-            "`telescope` and `zeroing config sections must either \
-            be provided or excluded together.`"
-                .to_string(),
-        )),
-    }
+        .try_deserialize::<AppConfig>()
 }

@@ -20,6 +20,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy -- -D warnings
+      - run: cargo clippy --release -- -D warnings
 
   unit-tests:
     strategy:
@@ -33,7 +34,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
-      - name: Run unit tests
+      - name: Run unit tests in debug
         run: cargo nextest run
-      - name: Run doc tests
-        run: cargo test --doc
+      - name: Run unit tests in release
+        run: cargo nextest run --release

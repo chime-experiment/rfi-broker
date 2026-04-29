@@ -1,4 +1,5 @@
 //! Axum endpoints and associated functions.
+#[cfg(debug_assertions)]
 use std::fmt::Write;
 
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};

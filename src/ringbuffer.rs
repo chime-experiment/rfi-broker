@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, VecDeque};
 
 use serde::Serialize;
 
-use eyre::{WrapErr, bail, eyre};
+use eyre::{OptionExt, WrapErr, bail, eyre};
 
 use ndarray::{Array2, ArrayD, ArrayViewD, Axis, IxDyn};
 use num_traits::Num;
@@ -128,7 +128,6 @@ pub struct RingBuffer<T> {
     frames: Mutex<VecDeque<Frame<T>>>,
 }
 
-#[cfg_attr(not(debug_assertions), allow(dead_code))]
 impl<T> RingBuffer<T>
 where
     T: Num + Clone,
@@ -140,6 +139,20 @@ where
             partial_frames: Mutex::new(BTreeMap::<u64, Frame<T>>::new()),
             frames: Mutex::new(VecDeque::<Frame<T>>::with_capacity(RING_CAPACITY)),
         }
+    }
+
+    /// Returns a cloned snapshot of all frames currently in the buffer.
+    ///
+    /// The lock is released before returning.
+    fn snapshot(&self) -> Vec<Frame<T>> {
+        self.frames.lock().iter().cloned().collect()
+    }
+
+    /// Return a copy of the most recent frame.
+    ///
+    /// The lock is released before returning.
+    pub fn last(&self) -> Option<Frame<T>> {
+        self.frames.lock().back().cloned()
     }
 
     /// Acquire the lock and push a frame to the buffer.
@@ -188,11 +201,9 @@ where
             // Evict the oldest frame and push to the buffer if it seems to
             // have received a reasonable number of samples
             if guard.len() == PARTIAL_FRAME_CAPACITY {
-                #[allow(
-                    clippy::unwrap_used,
-                    reason = "guarded map is guaranteed to have at least one item"
-                )]
-                let (_, frame) = guard.pop_first().unwrap();
+                let (_, frame) = guard
+                    .pop_first()
+                    .ok_or_eyre("unexpected failure extracting partial frame")?;
                 // Only push frames with a minimum sample count
                 if frame.sample_count >= MIN_FRAME_SAMPLE_COUNT {
                     self.lock_push(frame);
@@ -208,23 +219,21 @@ where
             guard.insert(key, new_frame);
         }
 
-        #[allow(
-            clippy::unwrap_used,
-            reason = "guarded map is guaranteed to contain the key due to earlier check"
-        )]
-        {
-            let frame: &mut Frame<T> = guard.get_mut(&key).unwrap();
+        let frame: &mut Frame<T> = guard.get_mut(&key).ok_or_else(|| {
+            eyre!("unexpected failure getting key {key}, which is expected to exist")
+        })?;
 
-            // Push data to the frame
-            let count: u64 = frame.insert(indices, &array.view())?;
+        // Push data to the frame
+        let count: u64 = frame.insert(indices, &array.view())?;
 
-            // Remove the frame from the partial map and push
-            // to the ringbuffer
-            if count == *self.frame_shape.get(axis).unwrap_or(&0_usize) as u64 {
-                let filled_frame: Frame<T> = guard.remove(&key).unwrap();
+        // Remove the frame from the partial map and push
+        // to the ringbuffer
+        if count == *self.frame_shape.get(axis).unwrap_or(&0_usize) as u64 {
+            let filled_frame: Frame<T> = guard.remove(&key).ok_or_else(|| {
+                eyre!("unexpected failure getting key {key}, which is expected to exist")
+            })?;
 
-                self.lock_push(filled_frame);
-            }
+            self.lock_push(filled_frame);
         }
 
         Ok(key)
@@ -256,35 +265,6 @@ where
         self.push_array(&arr, id, indices, axis)
     }
 
-    /// Returns a cloned snapshot of all frames currently in the buffer.
-    ///
-    /// The lock is released before returning.
-    fn snapshot(&self) -> Vec<Frame<T>> {
-        self.frames.lock().iter().cloned().collect()
-    }
-
-    /// Return a copy of the most recent frame.
-    ///
-    /// The lock is released before returning.
-    pub fn last(&self) -> Option<Frame<T>> {
-        self.frames.lock().back().cloned()
-    }
-
-    /// Get the length, or number of frames in the buffer.
-    pub fn len(&self) -> usize {
-        self.frames.lock().len()
-    }
-
-    /// Get the number of frames in the buffer queue.
-    pub fn queue_len(&self) -> usize {
-        self.partial_frames.lock().len()
-    }
-
-    /// Get the buffer frame shape
-    pub const fn shape(&self) -> &Vec<usize> {
-        &self.frame_shape
-    }
-
     /// Return an `N+1` dimensional [`ArrayD`] stacked over an axis, or `None`
     /// if no frames available.
     ///
@@ -314,6 +294,27 @@ where
             .collect();
 
         ndarray::Array2::<u8>::from_shape_vec((nrows, ncols), flat_vec).ok()
+    }
+}
+
+#[cfg(any(debug_assertions, test))]
+impl<T> RingBuffer<T>
+where
+    T: Clone,
+{
+    /// Get the length, or number of frames in the buffer.
+    pub fn len(&self) -> usize {
+        self.frames.lock().len()
+    }
+
+    /// Get the number of frames in the buffer queue.
+    pub fn queue_len(&self) -> usize {
+        self.partial_frames.lock().len()
+    }
+
+    /// Get the buffer frame shape
+    pub const fn shape(&self) -> &Vec<usize> {
+        &self.frame_shape
     }
 }
 

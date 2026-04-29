@@ -25,16 +25,36 @@ specified in `Cargo.lock` by including the `--locked` argument.
 ## Build from source
 ```
 $ git clone https://github.com/ljgray/rfi-receiver.git
-$ cargo build [--release]
-$ cargo run [--release]
+$ cargo build [--release] [--profile <profile>]
+$ cargo run [--release] [--profile <profile>]
 ```
+
+## Profiles
+The following profiles are included:
+- `debug`
+- `release-with-debug-info`
+- `release`
 
 # Running
 ```
-$ ./path/to/binary --addr <http address> --udp_addr <udp recv address> [--config <path to config>] [--threads <num threads>]
+$ [RUST_LOG=<log_level>] ./path/to/binary --addr <http address> --udp_addr <udp recv address> [--config <path to config>] [--threads <num threads>]
 ```
 
 If bulding from source, you can also just use `cargo run -- [args]`.
+
+## Logging
+Log level is controlled by the `RUST_LOG` environment variable, and defaults to `INFO`. However, `DEBUG` statements (and below)
+are entirely remove in a `release` build.
+
+## Endpoints
+The following endpoints are exposed in all build profiles:
+- `/metadata`: most recent packet header
+- `/metrics`: prometheus metrics
+- `/bad_input_likelihood`: per-input metric containing the likelihood of the input being corrupted
+- `/`: prints `bad_input_likelihood`
+
+Debug-only:
+- `/data`: prints the most recent frame in each ringbuffer, and buffer length and shape
 
 # Tests
 Unit tests can be run using

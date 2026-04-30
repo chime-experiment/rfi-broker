@@ -10,6 +10,7 @@ chrono = "0.4.44"
 clap = { version = "4.6", features = ["derive"] }
 config = "0.15.22"
 eyre = "0.6.12"
+mimalloc = "0.1.50"
 ndarray = { version = "0.17.2", features = ["serde"] }
 num-traits = "0.2.19"
 parking_lot = "0.12.5"

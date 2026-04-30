@@ -23,6 +23,9 @@ mod server;
 #[cfg(test)]
 pub(crate) mod test_fixtures;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Command-line parser
 #[derive(Parser)]
 #[command(name = "RFI Receiver")]

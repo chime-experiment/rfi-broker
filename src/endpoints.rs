@@ -53,7 +53,7 @@ pub async fn data(State(state): State<SharedDataState>) -> Result<String, (Statu
 
         if let Some(frame) = frac_flagged.last() {
             writeln!(out, "{:#?}", frame.array).map_err(handler_err)?;
-            writeln!(out, "{:#?}", frame.mask).map_err(handler_err)?;
+            writeln!(out, "{:?}", frame.mask).map_err(handler_err)?;
         }
         writeln!(out).map_err(handler_err)?; // blank line
     }
@@ -66,7 +66,7 @@ pub async fn data(State(state): State<SharedDataState>) -> Result<String, (Statu
 
         if let Some(frame) = sktilde_avg.last() {
             writeln!(out, "{:#?}", frame.array).map_err(handler_err)?;
-            writeln!(out, "{:#?}", frame.mask).map_err(handler_err)?;
+            writeln!(out, "{:?}", frame.mask).map_err(handler_err)?;
         }
         writeln!(out).map_err(handler_err)?;
     }

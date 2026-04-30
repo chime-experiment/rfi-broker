@@ -180,19 +180,11 @@ pub async fn serve(
     let metrics: SharedMetrics = Arc::new(Metrics::default());
     let config: Option<Arc<AppConfig>> = config.map(Arc::new);
 
-    // Start the solar event task, if a config was provided
-    let solar = config.map_or_else(
-        || {
-            tracing::info!("solar zeroing disabled - no config was provided");
-            tokio::spawn(std::future::pending()) // never resolves, effectively disabled
-        },
-        |cfg| {
-            tokio::spawn(crate::events::solar_event_task(
-                Arc::clone(&metrics),
-                Arc::clone(&cfg),
-            ))
-        },
-    );
+    // Start the solar event task
+    let solar = tokio::spawn(crate::events::solar_event_task(
+        Arc::clone(&metrics),
+        config.map(|c| Arc::clone(&c)),
+    ));
 
     // Construct the socket and start the packet handling task. If this becomes
     // a bottleneck, it could be run in multiple threads

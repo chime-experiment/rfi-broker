@@ -117,9 +117,17 @@ async fn post_event(
 /// # Errors
 /// Errors if computing solar noon fails, or the telescope coordinates
 /// are invalid.
-pub async fn solar_event_task(metrics: SharedMetrics, config: SharedAppConfig) -> eyre::Result<()> {
-    let (Some(telescope), Some(zeroing)) = (&config.telescope, &config.zeroing) else {
-        tracing::info!("solar event config not set - task going into permanent idle");
+pub async fn solar_event_task(
+    metrics: SharedMetrics,
+    config: Option<SharedAppConfig>,
+) -> eyre::Result<()> {
+    // If either `config` is None, or either of the required config entries
+    // is None, this task is enter a permanent pending state.
+    let Some((telescope, zeroing)) = config
+        .as_ref()
+        .and_then(|c| Some((c.telescope.as_ref()?, c.zeroing.as_ref()?)))
+    else {
+        tracing::info!("solar event config not set - task going into idle state");
         // Won't wake, so no CPU consumed
         std::future::pending::<()>().await;
         unreachable!();

@@ -150,7 +150,15 @@ where
     ///
     /// The lock is released before returning.
     fn snapshot(&self) -> Vec<SharedFrame<T>> {
-        Vec::from(self.frames.read().clone())
+        let guard = self.frames.read();
+        let (a, b) = guard.as_slices();
+        let mut snapshot = Vec::with_capacity(a.len() + b.len());
+        snapshot.extend_from_slice(a);
+        snapshot.extend_from_slice(b);
+
+        snapshot
+        // TODO: confirm whether this is noticeably slower
+        // Vec::from(self.frames.read().clone())
     }
 
     /// Return a copy of the most recent frame.
@@ -158,7 +166,6 @@ where
     /// The lock is released before returning.
     pub fn last(&self) -> Option<SharedFrame<T>> {
         self.frames.read().back().cloned()
-        // self.frames.read().back().map(|arc| arc.as_ref().clone())
     }
 
     /// Acquire the lock and push a frame to the buffer.
@@ -167,6 +174,7 @@ where
         if guard.len() == RING_CAPACITY {
             guard.pop_front(); // evict oldest
         }
+        //TODO: look at using Arc::new_uninit() somehow
         guard.push_back(Arc::new(frame));
     }
 

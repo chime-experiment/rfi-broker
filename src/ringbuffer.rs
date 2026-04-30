@@ -7,8 +7,9 @@
 //! The shape and dimensions are fixed at construction time; frames with
 //! a mismatched shape are dropped on push.
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::Arc;
 
 use serde::Serialize;
 
@@ -111,13 +112,14 @@ where
     }
 }
 
+type SharedFrame<T> = Arc<Frame<T>>;
+
 /// Ring buffer of decoded frames, shared across tasks.
 ///
 /// All frames are required to have the same shape, which is fixed at
 /// construction. Pushes that violate this are dropped.
 ///
-/// Wrap in [`Arc`] before passing to spawned tasks or Axum state. The inner
-/// [`Mutex`] is held only for push/snapshot operations.
+/// The inner [`RwLock`] is held only for push/snapshot operations.
 #[derive(Default, Debug)]
 pub struct RingBuffer<T> {
     /// Expected shape of each frame
@@ -125,7 +127,7 @@ pub struct RingBuffer<T> {
     /// Store a handful of partial frames
     partial_frames: Mutex<BTreeMap<u64, Frame<T>>>,
     /// Ring buffer of the most recently received array frames
-    frames: Mutex<VecDeque<Frame<T>>>,
+    frames: RwLock<VecDeque<SharedFrame<T>>>,
 }
 
 impl<T> RingBuffer<T>
@@ -137,31 +139,35 @@ where
         Self {
             frame_shape,
             partial_frames: Mutex::new(BTreeMap::<u64, Frame<T>>::new()),
-            frames: Mutex::new(VecDeque::<Frame<T>>::with_capacity(RING_CAPACITY)),
+            frames: RwLock::new(VecDeque::<SharedFrame<T>>::with_capacity(RING_CAPACITY)),
         }
     }
 
     /// Returns a cloned snapshot of all frames currently in the buffer.
     ///
+    /// This actually just clones the ``Arc`` which wraps the frame,
+    /// so overhead is extremely minimal.
+    ///
     /// The lock is released before returning.
-    fn snapshot(&self) -> Vec<Frame<T>> {
-        self.frames.lock().iter().cloned().collect()
+    fn snapshot(&self) -> Vec<SharedFrame<T>> {
+        Vec::from(self.frames.read().clone())
     }
 
     /// Return a copy of the most recent frame.
     ///
     /// The lock is released before returning.
-    pub fn last(&self) -> Option<Frame<T>> {
-        self.frames.lock().back().cloned()
+    pub fn last(&self) -> Option<SharedFrame<T>> {
+        self.frames.read().back().cloned()
+        // self.frames.read().back().map(|arc| arc.as_ref().clone())
     }
 
     /// Acquire the lock and push a frame to the buffer.
     fn lock_push(&self, frame: Frame<T>) {
-        let mut guard = self.frames.lock();
+        let mut guard = self.frames.write();
         if guard.len() == RING_CAPACITY {
             guard.pop_front(); // evict oldest
         }
-        guard.push_back(frame);
+        guard.push_back(Arc::new(frame));
     }
 
     /// Add an array to a frame and push the frame to the buffer if it is full.
@@ -271,7 +277,7 @@ where
     /// Returns `None` if any errors occur while stacking.
     pub fn stack_array(&self, axis: impl Into<Option<usize>>) -> Option<ArrayD<T>> {
         // Grab a snapshot of the current buffer and relase lock
-        let snapshot: Vec<Frame<T>> = self.snapshot();
+        let snapshot: Vec<SharedFrame<T>> = self.snapshot();
         // `stack` requires views
         let views: Vec<ArrayViewD<T>> = snapshot.iter().map(|f| f.array.view()).collect();
 
@@ -283,14 +289,14 @@ where
     /// Stack the frame masks.
     pub fn stack_mask(&self) -> Option<Array2<u8>> {
         // Get a snapshot of the current buffer and release lock
-        let snapshot: Vec<Frame<T>> = self.snapshot();
+        let snapshot: Vec<SharedFrame<T>> = self.snapshot();
         // Sort out the shape
         let nrows = self.last()?.mask.len();
         let ncols = snapshot.len();
         // Masks are 1-dimensional, so stack over the first axis
         let flat_vec: Vec<u8> = snapshot
-            .into_iter()
-            .flat_map(|f| f.mask.into_iter().map(u8::from)) // return u8 instead of bool
+            .iter()
+            .flat_map(|f| f.mask.iter().map(|&x| u8::from(x))) // return u8 instead of bool
             .collect();
 
         ndarray::Array2::<u8>::from_shape_vec((nrows, ncols), flat_vec).ok()
@@ -304,7 +310,7 @@ where
 {
     /// Get the length, or number of frames in the buffer.
     pub fn len(&self) -> usize {
-        self.frames.lock().len()
+        self.frames.read().len()
     }
 
     /// Get the number of frames in the buffer queue.
@@ -347,7 +353,7 @@ mod tests {
         assert_eq!(buf.len(), 1);
 
         // Make sure that the input values are as-expected
-        let frame = buf.last().unwrap().array;
+        let frame = &buf.last().unwrap().array;
         assert_eq!(frame, expected_arr);
 
         Ok(())

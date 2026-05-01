@@ -35,6 +35,6 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
       - name: Run unit tests in debug
-        run: cargo nextest run
+        run: cargo nextest run --profile ci
       - name: Run unit tests in release
-        run: cargo nextest run --release
+        run: cargo nextest run --profile ci --release

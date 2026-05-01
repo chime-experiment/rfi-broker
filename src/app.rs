@@ -23,7 +23,7 @@ use tokio::net::{TcpListener, UdpSocket};
 use crate::config::AppConfig;
 use crate::datastate::{DataState, SharedDataState};
 use crate::endpoints;
-use crate::metrics::{Metrics, SharedMetrics, update_metrics};
+use crate::metrics::{Metrics, SharedMetrics};
 use crate::packet::Packet;
 
 /// Size in MB for the UDP socket buffer
@@ -88,7 +88,7 @@ fn make_router(state: SharedDataState, metrics: SharedMetrics) -> Router {
 async fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Error> {
     let socket = UdpSocket::bind(addr).await?;
 
-    // Borrow the socket as a socket2 ref to increase buffer
+    // Borrow the socket as a socket2 ref to increase buffer size
     let sock_ref = socket2::SockRef::from(&socket);
     sock_ref.set_recv_buffer_size(UDP_BUF_SIZE_MB * 1024 * 1024)?;
 
@@ -98,6 +98,7 @@ async fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Error> {
         reason = "buffer size should never be large enough to cause precision loss"
     )]
     let actual = sock_ref.recv_buffer_size()? as f64 / 1024_f64 / 1024_f64;
+
     tracing::info!(
         addr = ?addr,
         requested_MB = ?UDP_BUF_SIZE_MB,
@@ -117,56 +118,47 @@ async fn packet_handler_task(
     metrics: SharedMetrics,
     state: SharedDataState,
 ) -> Result<(), std::io::Error> {
+    // Record the first received packet
+    static FIRST_PACKET: std::sync::Once = std::sync::Once::new();
     // Allocate a buffer large enough for any valid UDP packet
     let mut buf = vec![0u8; u16::MAX as usize];
 
-    let mut last_update_id: u64 = 0;
-
     loop {
-        // Wait until socket is readable
+        // Wait until socket is readable. Using the `await` here means that this thread
+        // will be released each time it drains the os buffer. This ends up being less
+        // performant than having a permanent thread always listening, but the effect
+        // is negligible for the amount of data that we're receiving. If we ever end up
+        // wanting higher throughput, this should probably just become a fixed thread.
         sock.readable().await?;
 
-        if last_update_id == 0 {
-            tracing::debug!("started receiving packets");
-        }
+        FIRST_PACKET.call_once(|| tracing::info!("started receiving packets"));
 
-        // Pass through the entire os buffer
+        // drain the entire OS buffer
         loop {
-            match sock.try_recv_from(&mut buf) {
-                // Received a packet
-                Ok((len, _)) => match Packet::parse(buf.get(..len).unwrap_or_default()) {
-                    // Successfully parsed the packet
-                    Ok(packet) => match state.push(packet) {
-                        // data state push successfull
-                        Ok(id) => {
-                            metrics.packet_loss.inc_recv();
-                            if id != last_update_id {
-                                last_update_id = id;
-                                update_metrics(&metrics, &state);
-                            }
-                        }
-                        // failed to push to the data state
-                        Err(e) => {
-                            metrics.packet_loss.inc_lost();
-                            tracing::warn!(error = ?e, "error pushing packet to shared state");
-                        }
-                    },
-                    // failed to parse the packet
-                    Err(e) => {
-                        metrics.packet_loss.inc_lost();
-                        tracing::warn!(error = ?e, "error parsing received packet");
-                    }
-                },
-                // no packet available - release the thread
-                Err(ref e) if e.kind() == WouldBlock => {
-                    break;
-                }
-                // error occured during UDP read
+            // try to read a packet, breaking the inner loop if the
+            // os buffer is empty
+            let nbytes = match sock.try_recv_from(&mut buf) {
+                Ok((nbytes, _)) => nbytes,
+                Err(ref e) if e.kind() == WouldBlock => break,
+                // something happened - log it and try to get another packet
                 Err(e) => {
                     metrics.packet_loss.inc_lost();
-                    tracing::debug!(error = ?e, "UDP recv error");
+                    tracing::debug!(error = ?e, "UDP recv error:");
+                    continue;
                 }
-            }
+            };
+
+            Packet::parse(buf.get(..nbytes).unwrap_or_default())
+                // push to state if parse was successful
+                .and_then(|packet| state.push(packet))
+                .map_or_else(
+                    // push failed - log it and move on
+                    |e| {
+                        metrics.packet_loss.inc_lost();
+                        tracing::warn!(error = ?e, "error handling received packet:");
+                    },
+                    |_| metrics.packet_loss.inc_recv(),
+                );
         }
     }
 }
@@ -186,9 +178,15 @@ pub async fn run(
     let config: Option<Arc<AppConfig>> = config.map(Arc::new);
 
     // Start the solar event task
-    let solar = tokio::spawn(crate::tasks::solar_event_task(
+    let rfi_zeroing = tokio::spawn(crate::tasks::solar_event_task(
         Arc::clone(&metrics),
         config.map(|c| Arc::clone(&c)),
+    ));
+
+    // Start a task to update metrics every N seconds
+    let metrics_tracking = tokio::spawn(crate::metrics::update_prometheus_metrics_task(
+        Arc::clone(&metrics),
+        Arc::clone(&state),
     ));
 
     // Construct the socket and start the packet handling task. If this becomes
@@ -209,6 +207,7 @@ pub async fn run(
     tokio::select! {
         result = packet_handler => result?.wrap_err("packet handler failed"),
         result = http => result?.wrap_err("http server failed"),
-        result = solar => result?.wrap_err("solar zeroing task failed"),
+        result = rfi_zeroing => result?.wrap_err("solar zeroing task failed"),
+        result = metrics_tracking => result?.wrap_err("metrics tracking task failed"),
     }
 }

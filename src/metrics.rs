@@ -7,6 +7,9 @@ use prometheus::{Gauge, GaugeVec, Opts, Registry, TextEncoder};
 
 use crate::datastate::SharedDataState;
 
+/// Prometheus update interval
+const PROM_UPDATE_INTERVAL_SECONDS: u64 = 1;
+
 /// Tracker for a sample loss count/fraction.
 // NB: it would be good for this to be a rolling metric
 // or something, instead of looking at the entire duration.
@@ -157,44 +160,55 @@ impl Metrics {
 ///
 /// This is independent of the trigger mechanism - it should be
 /// called from an async function run using ``tokio::spawn``.
-pub fn update_metrics(metrics: &SharedMetrics, state: &SharedDataState) {
-    // Use just the most recent frame
-    if let Some(frac_flagged) = state.frac_flagged.get()
-        && let Some(frame) = frac_flagged.last()
-    {
-        // Iterate frequencies and update for each
-        for (label, val) in frame
-            .array
-            .iter()
-            .enumerate()
-            .map(|(i, val)| (i.to_string(), val))
-        {
-            metrics
-                .frac_flagged_prom
-                .with_label_values(&[&label])
-                .set(f64::from(*val));
-        }
-    }
+pub async fn update_prometheus_metrics_task(
+    metrics: SharedMetrics,
+    state: SharedDataState,
+) -> eyre::Result<()> {
+    // Update metrics once per second
+    let mut interval =
+        tokio::time::interval(std::time::Duration::from_secs(PROM_UPDATE_INTERVAL_SECONDS));
 
-    if let Some(sktilde) = state.sktilde_avg.get()
-        && let Some(frame) = sktilde.last()
-    {
-        for (label, val) in frame
-            .array
-            .iter()
-            .enumerate()
-            .map(|(i, val)| (i.to_string(), val))
-        {
-            metrics
-                .sktilde_prom
-                .with_label_values(&[&label])
-                .set(f64::from(*val));
-        }
-    }
+    loop {
+        interval.tick().await;
 
-    metrics
-        .packet_loss_prom
-        .set(metrics.packet_loss.frac_lost());
+        // Use just the most recent frame
+        if let Some(frac_flagged) = state.frac_flagged.get()
+            && let Some(frame) = frac_flagged.last()
+        {
+            // Iterate frequencies and update for each
+            for (label, val) in frame
+                .array
+                .iter()
+                .enumerate()
+                .map(|(i, val)| (i.to_string(), val))
+            {
+                metrics
+                    .frac_flagged_prom
+                    .with_label_values(&[&label])
+                    .set(f64::from(*val));
+            }
+        }
+
+        if let Some(sktilde) = state.sktilde_avg.get()
+            && let Some(frame) = sktilde.last()
+        {
+            for (label, val) in frame
+                .array
+                .iter()
+                .enumerate()
+                .map(|(i, val)| (i.to_string(), val))
+            {
+                metrics
+                    .sktilde_prom
+                    .with_label_values(&[&label])
+                    .set(f64::from(*val));
+            }
+        }
+
+        metrics
+            .packet_loss_prom
+            .set(metrics.packet_loss.frac_lost());
+    }
 }
 
 #[cfg(test)]

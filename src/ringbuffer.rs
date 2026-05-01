@@ -19,7 +19,7 @@ use ndarray::{Array2, ArrayD, ArrayViewD, Axis, IxDyn};
 use num_traits::Num;
 
 /// Maximum number of array frames retained in the ring buffer.
-const RING_CAPACITY: usize = 64;
+const RING_CAPACITY: usize = 128;
 const PARTIAL_FRAME_CAPACITY: usize = 8;
 const MIN_FRAME_SAMPLE_COUNT: u64 = 1;
 
@@ -151,14 +151,14 @@ where
     /// The lock is released before returning.
     fn snapshot(&self) -> Vec<SharedFrame<T>> {
         let guard = self.frames.read();
+        // produces at-most 2 contiguous slices, so faster to copy
         let (a, b) = guard.as_slices();
-        let mut snapshot = Vec::with_capacity(a.len() + b.len());
+        let mut snapshot = Vec::with_capacity(RING_CAPACITY);
+        // insert the slices
         snapshot.extend_from_slice(a);
         snapshot.extend_from_slice(b);
 
         snapshot
-        // TODO: confirm whether this is noticeably slower
-        // Vec::from(self.frames.read().clone())
     }
 
     /// Return a copy of the most recent frame.
@@ -294,14 +294,16 @@ where
         ndarray::stack(ax, &views).ok()
     }
 
-    /// Stack the frame masks.
+    /// Stack the frame masks, creating a new outermost axis.
     pub fn stack_mask(&self) -> Option<Array2<u8>> {
         // Get a snapshot of the current buffer and release lock
         let snapshot: Vec<SharedFrame<T>> = self.snapshot();
         // Sort out the shape
-        let nrows = self.last()?.mask.len();
-        let ncols = snapshot.len();
-        // Masks are 1-dimensional, so stack over the first axis
+        let ncols = self.last()?.mask.len();
+        let nrows = snapshot.len();
+        // Masks are 1-dimensional, so concatenate the first axis. This means
+        // that the sample axis is the slowest varying, so have to transpose
+        // if this isn't the desired layout
         let flat_vec: Vec<u8> = snapshot
             .iter()
             .flat_map(|f| f.mask.iter().map(|&x| u8::from(x))) // return u8 instead of bool

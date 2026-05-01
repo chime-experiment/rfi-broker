@@ -125,6 +125,11 @@ async fn packet_handler_task(
     loop {
         // Wait until socket is readable
         sock.readable().await?;
+
+        if last_update_id == 0 {
+            tracing::debug!("started receiving packets");
+        }
+
         // Pass through the entire os buffer
         loop {
             match sock.try_recv_from(&mut buf) {

@@ -337,6 +337,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ndarray::s;
 
     #[allow(
         clippy::cast_sign_loss,
@@ -365,6 +366,52 @@ mod tests {
         // Make sure that the input values are as-expected
         let frame = &buf.last().unwrap().array;
         assert_eq!(frame, expected_arr);
+
+        Ok(())
+    }
+
+    #[allow(
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "casts on small positive integers"
+    )]
+    #[test]
+    /// Test that the mask and arrays are stacked properly
+    fn test_stack_frames() -> Result<(), Box<dyn std::error::Error>> {
+        let frame_shape = vec![3, 12];
+        //i Create a new buffer
+        let buf = RingBuffer::<f32>::new(frame_shape);
+        // create an array to push
+        let arr = ArrayD::<f32>::from_shape_fn(IxDyn(&[2, 12]), |idx| idx[1] as f32);
+        // create an array to compare with, since there's an extra row
+        let mut arr_compare = ArrayD::<f32>::zeros(IxDyn(&[3, 12]));
+        arr_compare.slice_mut(s![..2, ..]).assign(&arr);
+
+        // push 10 times to ensure that we work all the way through the partial
+        // frame buffer (NB: there should be a better way to do this - maybe a flush function?)
+        for i in 0..10 {
+            buf.push_array(&arr.clone(), i as u64, &[0, 1], 0)?;
+        }
+
+        // Confirm that two frames have been pushed
+        assert_eq!(buf.len(), 2);
+
+        // Stack both buffers over the 0th axis
+        let arr_stack = buf.stack_array(0).unwrap();
+        let mask_stack = buf.stack_mask().unwrap();
+
+        assert_eq!(arr_stack.shape(), &[2, 3, 12]);
+        assert_eq!(mask_stack.shape(), &[2, 3]);
+
+        // Check that each row of the stacked arrays are as expected
+        for i in 0..buf.len() {
+            assert_eq!(arr_stack.index_axis(Axis(0), i), arr_compare);
+            assert_eq!(mask_stack.row(i).to_vec(), vec![1u8, 1u8, 0u8]);
+        }
+
+        // Finally, confirm that stacking over different axes also works as expected
+        assert_eq!(buf.stack_array(1).unwrap().shape(), &[3, 2, 12]);
+        assert_eq!(buf.stack_array(2).unwrap().shape(), &[3, 12, 2]);
 
         Ok(())
     }

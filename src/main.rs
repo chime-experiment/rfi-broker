@@ -11,14 +11,14 @@ use eyre::WrapErr;
 
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
+mod app;
 mod config;
 mod datastate;
 mod endpoints;
-mod events;
 mod metrics;
 mod packet;
 mod ringbuffer;
-mod server;
+mod tasks;
 
 #[cfg(test)]
 pub(crate) mod test_fixtures;
@@ -48,7 +48,7 @@ struct Cli {
     pub threads: usize,
 }
 
-/// Returns the default number of work threads: the lesser of
+/// Returns the default number of work threads: the larger of
 /// the number of logical CPU cores and 4. Falls back to 1 if
 /// the OS does not report available parallelism.
 fn _default_nthreads() -> usize {
@@ -92,7 +92,7 @@ fn main() -> eyre::Result<()> {
         .enable_all()
         .build()
         .wrap_err("failed to build async runtime")?
-        .block_on(server::serve(cli.addr, cli.udp_addr, config))
+        .block_on(app::run(cli.addr, cli.udp_addr, config))
         .wrap_err("server failed")?;
 
     Ok(())

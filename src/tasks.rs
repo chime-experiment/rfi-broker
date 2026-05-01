@@ -138,7 +138,7 @@ pub async fn solar_event_task(
         zeroing = ?zeroing,
         "solar RFI zeroing task started",
     );
-    // Construct the addresses only once
+    // Construct the addresses
     let first_stage_addr = format!("https://{}/{}", &zeroing.hostname, &zeroing.first_stage);
     let second_stage_addr = format!("https://{}/{}", &zeroing.hostname, &zeroing.second_stage);
 

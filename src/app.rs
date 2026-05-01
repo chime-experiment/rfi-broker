@@ -176,7 +176,7 @@ async fn packet_handler_task(
 ///
 /// # Errors
 /// Errors if either address cannot be bound.
-pub async fn serve(
+pub async fn run(
     http_addr: SocketAddr,
     udp_addr: SocketAddr,
     config: Option<AppConfig>,
@@ -186,7 +186,7 @@ pub async fn serve(
     let config: Option<Arc<AppConfig>> = config.map(Arc::new);
 
     // Start the solar event task
-    let solar = tokio::spawn(crate::events::solar_event_task(
+    let solar = tokio::spawn(crate::tasks::solar_event_task(
         Arc::clone(&metrics),
         config.map(|c| Arc::clone(&c)),
     ));

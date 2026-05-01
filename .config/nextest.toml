@@ -1,0 +1,5 @@
+# ``nextest`` test config
+[profile.ci]
+# Don't cancel after the first failure
+fail-fast = false
+status-level = "all"

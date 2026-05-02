@@ -19,6 +19,7 @@ use axum::middleware::{self, Next};
 use axum::{Router, routing::get};
 
 use tokio::net::{TcpListener, UdpSocket};
+use tokio::time::{Duration, Instant, sleep_until};
 
 use crate::config::AppConfig;
 use crate::datastate::{DataState, SharedDataState};
@@ -28,6 +29,9 @@ use crate::packet::Packet;
 
 /// Size in MB for the UDP socket buffer
 const UDP_BUF_SIZE_MB: usize = 8;
+/// Time in seconds between packets before all pending packets are
+/// flushed to the data state buffers
+const DATA_STATE_FLUSH_TIMEOUT_SECONDS: u64 = 5;
 
 /// Middleware to emit a debug message every time an endpoint is triggered.
 ///
@@ -119,46 +123,81 @@ async fn packet_handler_task(
     state: SharedDataState,
 ) -> Result<(), std::io::Error> {
     // Record the first received packet
-    static FIRST_PACKET: std::sync::Once = std::sync::Once::new();
+    let mut log_packet_recv: bool = true;
     // Allocate a buffer large enough for any valid UDP packet
     let mut buf = vec![0u8; u16::MAX as usize];
 
+    // Record how long it's been since the last packet was received
+    let timeout = Duration::from_secs(DATA_STATE_FLUSH_TIMEOUT_SECONDS);
+    let timer = sleep_until(Instant::now() + timeout);
+    tokio::pin!(timer);
+
     loop {
-        // Wait until socket is readable. Using the `await` here means that this thread
-        // will be released each time it drains the os buffer. This ends up being less
-        // performant than having a permanent thread always listening, but the effect
-        // is negligible for the amount of data that we're receiving. If we ever end up
-        // wanting higher throughput, this should probably just become a fixed thread.
-        sock.readable().await?;
+        tokio::select! {
+            // Wait until socket is readable. Making this asynchronous mean that this thread
+            // will be released each time it drains the os buffer. This ends up being less
+            // performant than having a permanent thread always listening, but the effect
+            // is negligible for the amount of data that we're receiving. If we ever end up
+            // wanting higher throughput, this should probably just become a fixed thread.
+            result = sock.readable() => {
+                result?;
 
-        FIRST_PACKET.call_once(|| tracing::info!("started receiving packets"));
-
-        // drain the entire OS buffer
-        loop {
-            // try to read a packet, breaking the inner loop if the
-            // os buffer is empty
-            let nbytes = match sock.try_recv_from(&mut buf) {
-                Ok((nbytes, _)) => nbytes,
-                Err(ref e) if e.kind() == WouldBlock => break,
-                // something happened - log it and try to get another packet
-                Err(e) => {
-                    metrics.packet_loss.inc_lost();
-                    tracing::debug!(error = ?e, "UDP recv error:");
-                    continue;
+                if log_packet_recv {
+                    tracing::info!("started receiving packets");
+                    log_packet_recv = false;
                 }
-            };
 
-            Packet::parse(buf.get(..nbytes).unwrap_or_default())
-                // push to state if parse was successful
-                .and_then(|packet| state.push(packet))
-                .map_or_else(
-                    // push failed - log it and move on
-                    |e| {
-                        metrics.packet_loss.inc_lost();
-                        tracing::warn!(error = ?e, "error handling received packet:");
-                    },
-                    |_| metrics.packet_loss.inc_recv(),
-                );
+                // drain the entire OS buffer
+                loop {
+                    // try to read a packet, breaking the inner loop if the
+                    // os buffer is empty
+                    let nbytes = match sock.try_recv_from(&mut buf) {
+                        Ok((nbytes, _)) => Some(nbytes),
+                        Err(ref e) if e.kind() == WouldBlock => break,
+                        // something happened - log it and move on
+                        Err(e) => {
+                            metrics.packet_loss.inc_lost();
+                            tracing::debug!(error = ?e, "UDP recv error:");
+                            None
+                        }
+                    };
+
+                    // Got a packet - reset the `flush` timer
+                    timer.as_mut().reset(Instant::now() + timeout);
+
+                    // If there was an error in `try_recv_from`, go back and
+                    // try to read another packet
+                    let Some(nbytes) = nbytes else { continue };
+
+                    Packet::parse(buf.get(..nbytes).unwrap_or_default())
+                        // push to state if parse was successful
+                        .and_then(|packet| state.push(packet))
+                        .map_or_else(
+                            // push failed - log it and move on
+                            |e| {
+                                metrics.packet_loss.inc_lost();
+                                tracing::warn!(error = ?e, "error handling received packet:");
+                            },
+                            |_| metrics.packet_loss.inc_recv(),
+                        );
+
+                }
+            }
+
+            () = &mut timer => {
+                // Flush any pending data to the state buffer and reset the timer
+                let nsamp = state.flush();
+
+                if nsamp > 0 {
+                    tracing::info!(
+                        "No packets received for {DATA_STATE_FLUSH_TIMEOUT_SECONDS}s - \
+                        flushed {nsamp} pending samples to state buffers"
+                    );
+                }
+                timer.as_mut().reset(Instant::now() + timeout);
+                // log the next time we start receiving packets
+                log_packet_recv =  true;
+            }
         }
     }
 }

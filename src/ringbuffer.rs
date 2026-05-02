@@ -11,22 +11,22 @@ use parking_lot::{Mutex, RwLock};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
-use serde::Serialize;
-
 use eyre::{OptionExt, WrapErr, bail, eyre};
 
 use ndarray::{Array2, ArrayD, ArrayViewD, Axis, IxDyn};
 use num_traits::Num;
 
-/// Maximum number of array frames retained in the ring buffer.
-const RING_CAPACITY: usize = 128;
+/// Maximum number of array frames retained in the ring buffer
+const RING_CAPACITY: usize = 64;
+/// Constants managing how/when a partial frame should stop accumulating
+/// samples and get moved into the buffer
 const PARTIAL_FRAME_CAPACITY: usize = 8;
 const MIN_FRAME_SAMPLE_COUNT: u64 = 1;
 
 /// Single [`RingBuffer`] frame.
 ///
 /// Contains an array, mask, and ID.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub struct Frame<T> {
     /// Numeric identifier
     pub sequence_id: u64,
@@ -35,7 +35,9 @@ pub struct Frame<T> {
     /// Track how many slices of the array exist
     pub mask: Vec<bool>,
     /// Track how many samples have already been written
+    /// relative to the max number
     sample_count: u64,
+    max_sample_count: u64,
     /// Track the axis over which this frame can be split
     axis: usize,
 }
@@ -59,6 +61,7 @@ where
             array: ArrayD::<T>::zeros(IxDyn(shape)),
             mask: vec![false; axlen],
             sample_count: 0,
+            max_sample_count: axlen as u64,
             axis,
         })
     }
@@ -69,7 +72,7 @@ where
     /// than the split. `indices` references the indices along the split
     /// axis where `chunk` should be written to. `indices` are not required
     /// to be contiguous.
-    fn insert(&mut self, indices: &[usize], chunk: &ArrayViewD<T>) -> eyre::Result<u64> {
+    fn insert(&mut self, indices: &[usize], chunk: &ArrayViewD<T>) -> eyre::Result<bool> {
         if chunk
             .shape()
             .get(self.axis)
@@ -108,7 +111,7 @@ where
             self.sample_count += 1;
         }
 
-        Ok(self.sample_count)
+        Ok(self.sample_count == self.max_sample_count)
     }
 }
 
@@ -174,8 +177,21 @@ where
         if guard.len() == RING_CAPACITY {
             guard.pop_front(); // evict oldest
         }
-        //TODO: look at using Arc::new_uninit() somehow
         guard.push_back(Arc::new(frame));
+    }
+
+    /// Push all partial frames into the buffer.
+    pub fn flush(&self) -> usize {
+        // Need to hold this guard throughout
+        let mut guard = self.partial_frames.lock();
+
+        let num_frames = guard.len();
+
+        while let Some((_, frame)) = guard.pop_first() {
+            self.lock_push(frame);
+        }
+
+        num_frames
     }
 
     /// Add an array to a frame and push the frame to the buffer if it is full.
@@ -185,7 +201,8 @@ where
     /// received.
     ///
     /// Frames which are never filled will eventually get pushed to the frame if
-    /// a sufficient number of samples have been received.
+    /// a sufficient number of samples have been received, or if `flush()`
+    /// is called.
     ///
     /// Assumes that frame `id`s are monotonically increasing.
     fn push_array(
@@ -238,11 +255,11 @@ where
         })?;
 
         // Push data to the frame
-        let count: u64 = frame.insert(indices, &array.view())?;
+        let frame_ready: bool = frame.insert(indices, &array.view())?;
 
         // Remove the frame from the partial map and push
         // to the ringbuffer
-        if count == *self.frame_shape.get(axis).unwrap_or(&0_usize) as u64 {
+        if frame_ready {
             let filled_frame: Frame<T> = guard.remove(&key).ok_or_else(|| {
                 eyre!("unexpected failure getting key {key}, which is expected to exist")
             })?;
@@ -387,11 +404,12 @@ mod tests {
         let mut arr_compare = ArrayD::<f32>::zeros(IxDyn(&[3, 12]));
         arr_compare.slice_mut(s![..2, ..]).assign(&arr);
 
-        // push 10 times to ensure that we work all the way through the partial
-        // frame buffer (NB: there should be a better way to do this - maybe a flush function?)
-        for i in 0..10 {
+        // Push the partial arrays to the buffer
+        for i in 0..2 {
             buf.push_array(&arr.clone(), i as u64, &[0, 1], 0)?;
         }
+        // flush frames to the buffer
+        buf.flush();
 
         // Confirm that two frames have been pushed
         assert_eq!(buf.len(), 2);

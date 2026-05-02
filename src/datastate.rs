@@ -79,6 +79,23 @@ impl DataState {
 
         Ok(id)
     }
+
+    /// Flush all buffers
+    pub fn flush(&self) -> usize {
+        let mut nflushed = 0;
+
+        if let Some(buf) = self.frac_flagged.get() {
+            nflushed += buf.flush();
+        }
+        if let Some(buf) = self.sktilde_avg.get() {
+            nflushed += buf.flush();
+        }
+        if let Some(buf) = self.bad_feed_counts.get() {
+            nflushed += buf.flush();
+        }
+
+        nflushed
+    }
 }
 
 #[cfg(test)]

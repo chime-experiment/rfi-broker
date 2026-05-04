@@ -96,10 +96,27 @@ pub async fn metrics(
 ) -> Result<impl IntoResponse, impl IntoResponse> {
     let mut result = serde_json::Map::new();
 
-    let packet_loss: f64 = metrics.packet_loss.frac_lost();
+    // Track packets received and rejected
+    let rejected_samples: u64 = metrics.packet_loss.lost();
+    let total_samples: u64 = metrics.packet_loss.total();
     result.insert(
-        "packet_loss".into(),
-        serde_json::to_value(packet_loss).map_err(handler_err)?,
+        "rejected_sample_count".into(),
+        serde_json::to_value(rejected_samples).map_err(handler_err)?,
+    );
+    result.insert(
+        "total_sample_count".into(),
+        serde_json::to_value(total_samples).map_err(handler_err)?,
+    );
+
+    let first_stage: bool = metrics.rfi_zeroing.first();
+    let second_stage: bool = metrics.rfi_zeroing.second();
+    result.insert(
+        "first_stage_enabled".into(),
+        serde_json::to_value(first_stage).map_err(handler_err)?,
+    );
+    result.insert(
+        "second_stage_enabled".into(),
+        serde_json::to_value(second_stage).map_err(handler_err)?,
     );
 
     Ok::<_, (StatusCode, String)>(Json(result))

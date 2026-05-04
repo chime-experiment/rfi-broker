@@ -222,12 +222,6 @@ pub async fn run(
         config.map(|c| Arc::clone(&c)),
     ));
 
-    // Start a task to update metrics every N seconds
-    let metrics_tracking = tokio::spawn(crate::metrics::update_prometheus_metrics_task(
-        Arc::clone(&metrics),
-        Arc::clone(&state),
-    ));
-
     // Construct the socket and start the packet handling task. If this becomes
     // a bottleneck, it could be run in multiple threads
     let udp_sock = construct_sock(udp_addr).await?;
@@ -247,6 +241,5 @@ pub async fn run(
         result = packet_handler => result?.wrap_err("packet handler failed"),
         result = http => result?.wrap_err("http server failed"),
         result = rfi_zeroing => result?.wrap_err("solar zeroing task failed"),
-        result = metrics_tracking => result?.wrap_err("metrics tracking task failed"),
     }
 }

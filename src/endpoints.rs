@@ -91,10 +91,18 @@ pub async fn data(State(state): State<SharedDataState>) -> Result<String, (Statu
 /// `GET /metrics` - dumps the current prometheus metrics.
 ///
 /// Returns `500` if serialisation fails.
-pub async fn metrics(State(m): State<SharedMetrics>) -> impl IntoResponse {
-    let metrics = m.serialize().map_err(handler_err)?;
+pub async fn metrics(
+    State(metrics): State<SharedMetrics>,
+) -> Result<impl IntoResponse, impl IntoResponse> {
+    let mut result = serde_json::Map::new();
 
-    Ok::<_, (StatusCode, String)>(Json(metrics))
+    let packet_loss: f64 = metrics.packet_loss.frac_lost();
+    result.insert(
+        "packet_loss".into(),
+        serde_json::to_value(packet_loss).map_err(handler_err)?,
+    );
+
+    Ok::<_, (StatusCode, String)>(Json(result))
 }
 
 /// `GET /` - dumps the result of `bad_input_likelihood`.

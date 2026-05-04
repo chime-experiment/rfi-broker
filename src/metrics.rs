@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 // or something, instead of looking at the entire duration.
 #[derive(Default)]
 pub struct SampleLossTracker {
-    total: Arc<AtomicU64>,
-    lost: Arc<AtomicU64>,
+    total: AtomicU64,
+    lost: AtomicU64,
 }
 
 impl SampleLossTracker {
@@ -27,40 +27,43 @@ impl SampleLossTracker {
         self.lost.fetch_add(1, Ordering::Relaxed);
     }
 
-    #[allow(
-        clippy::cast_precision_loss,
-        reason = "expected value range is below value for truncation"
-    )]
-    /// Compute the fraction of lost samples for the entire duration
-    /// during which this metric has been recorded.
-    pub fn frac_lost(&self) -> f64 {
-        let total = self.total.load(Ordering::Relaxed) as f64;
-        let lost = self.lost.load(Ordering::Relaxed) as f64;
+    /// Get the lost sample count
+    pub fn lost(&self) -> u64 {
+        self.lost.load(Ordering::Relaxed)
+    }
 
-        if total < f64::EPSILON {
-            0.0
-        } else {
-            lost / total
-        }
+    /// Get the total sample count
+    pub fn total(&self) -> u64 {
+        self.total.load(Ordering::Relaxed)
     }
 }
 
 /// Tracker for first/second-stage RFI zeroing.
 #[derive(Default)]
 pub struct RFIZeroingTracker {
-    first_stage: Arc<AtomicBool>,
-    second_stage: Arc<AtomicBool>,
+    first_stage: AtomicBool,
+    second_stage: AtomicBool,
 }
 
 impl RFIZeroingTracker {
     /// Record the state of first-stage flagging.
     pub fn set_first(&self, value: bool) {
-        self.first_stage.store(value, Ordering::Relaxed);
+        self.first_stage.store(value, Ordering::Release);
     }
 
     /// Record the state of second-stage flagging.
     pub fn set_second(&self, value: bool) {
-        self.second_stage.store(value, Ordering::Relaxed);
+        self.second_stage.store(value, Ordering::Release);
+    }
+
+    /// Get the value of the first stage status
+    pub fn first(&self) -> bool {
+        self.first_stage.load(Ordering::Relaxed)
+    }
+
+    /// Get the value of the second stage status
+    pub fn second(&self) -> bool {
+        self.second_stage.load(Ordering::Relaxed)
     }
 }
 
@@ -97,7 +100,7 @@ mod tests {
             tracker.inc_lost();
         }
 
-        let frac = tracker.frac_lost();
+        let frac = tracker.lost() as f64 / tracker.total() as f64;
 
         // Check that the fraction is lost is as expected,
         // within a tolerance

@@ -12,6 +12,7 @@ config = "0.15.22"
 eyre = "0.6.12"
 mimalloc = "0.1.50"
 ndarray = { version = "0.17.2", features = ["serde"] }
+ndarray-npy = "0.10.0"
 num-traits = "0.2.19"
 parking_lot = "0.12.5"
 reqwest = { version = "0.13.2", features = ["json"] }

@@ -16,7 +16,10 @@ use eyre::WrapErr;
 
 #[cfg(debug_assertions)]
 use axum::middleware::{self, Next};
-use axum::{Router, routing::get};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::time::{Duration, Instant, sleep_until};
@@ -70,7 +73,9 @@ fn make_router(state: SharedDataState, metrics: SharedMetrics) -> Router {
 
     // debug-only endpoints
     #[cfg(debug_assertions)]
-    let state_router = state_router.route("/data", get(endpoints::data));
+    let state_router = state_router
+        .route("/last-frame", get(endpoints::last_frame))
+        .route("/write-data", post(endpoints::write_data));
 
     // Include the state
     let state_router = state_router.with_state(state);

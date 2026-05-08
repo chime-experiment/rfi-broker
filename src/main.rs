@@ -18,6 +18,7 @@ mod endpoints;
 mod metrics;
 mod packet;
 mod ringbuffer;
+mod stats;
 mod tasks;
 
 #[cfg(test)]

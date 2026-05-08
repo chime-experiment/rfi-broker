@@ -1,11 +1,74 @@
 //! Outlier statistics computed on ``ndarray::ArrayD``s.
 use ndarray::{Array, Array1, Array2, ArrayD, ArrayView, Axis, Dimension, RemoveAxis, Zip};
 
+use eyre::bail;
+
+/// Compute the likelihood that an input is bad, based on the `bad_feed_counts`
+/// dataset in the shared state.
+///
+/// The likelihood metric is computed by averaging the number of "bad" feeds
+/// computed by kotekan over time, then taking a median over frequency to
+/// produce a single likelihood value per element. The final likelihood
+/// is derived as a percentage and normalized by the number of kotekan
+/// frames provided by each packet.
+pub fn compute_bad_input_likelihood(
+    arr: &ArrayD<u8>,
+    mask: &Array2<u8>,
+) -> eyre::Result<ArrayD<f32>> {
+    // Confirm the array dimension
+    if arr.ndim() != 3 {
+        bail!("expected array with dimension 3, got {:#}", arr.ndim());
+    }
+    // Grab the buffer if it exists
+    // let Some(buf) = &state.bad_feed_counts.get() else {
+    //     bail!("data buffer not initialized");
+    // };
+
+    // let Some(arr) = &buf.stack_array(0) else {
+    //     bail!("data buffer is empty");
+    // };
+
+    // let Some(mask) = &buf.stack_mask() else {
+    //     bail!("data buffer incorrectly formatted");
+    // };
+
+    // Compute the per-feed likelihood metric. This is guaranteed
+    // to succeed because call to `&buf.stack` above would have
+    // failed if the array was empty
+    let (mean, norm) = masked_mean_0th_axis(arr, mask);
+    // Remove any frequencies which are entirely zero - these were
+    // never received and shouldn't be included in the median
+    let indices: Vec<usize> = norm
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| v.abs() > f32::EPSILON)
+        .map(|(i, _)| i)
+        .collect();
+
+    let mean_reduced = mean.select(Axis(0), &indices);
+    let mut median = median_axis(&mean_reduced.view(), Axis(0));
+
+    // Convert to a percentage and normalize by the number of frames per packet
+    // let meta = state
+    //     .metadata
+    //     .get()
+    //     .ok_or_eyre("metadata is not accessible")?;
+    // // NB: this is what was done before, but unclear as to why
+    // #[allow(
+    //     clippy::cast_precision_loss,
+    //     reason = "values too small for precision loss"
+    // )]
+    let norm = 100.0 / 10.0; // meta.lock().frames_per_packet as f32;
+    median *= norm;
+
+    Ok(median)
+}
+
 /// Compute a masked mean over the 0th axis of an [`ArrayD`].
 ///
 /// The mask must be two-dimensional, with axes matching the first and
 /// last axes of `arr`.
-pub fn masked_mean_0th_axis(arr: &ArrayD<u8>, mask: &Array2<u8>) -> (ArrayD<f32>, Array1<f32>) {
+fn masked_mean_0th_axis(arr: &ArrayD<u8>, mask: &Array2<u8>) -> (ArrayD<f32>, Array1<f32>) {
     // Max buffer length is 64, so can guarantee that accumulating
     // to u16 will not overflow
     let mut mean: ArrayD<f32> = arr.fold_axis(Axis(0), 0f32, |&acc, &x| acc + f32::from(x));
@@ -32,7 +95,7 @@ pub fn masked_mean_0th_axis(arr: &ArrayD<u8>, mask: &Array2<u8>) -> (ArrayD<f32>
 }
 
 /// Compute the median of an array across an arbitrary axis.
-pub fn median_axis<D>(arr: &ArrayView<f32, D>, axis: Axis) -> Array<f32, D::Smaller>
+fn median_axis<D>(arr: &ArrayView<f32, D>, axis: Axis) -> Array<f32, D::Smaller>
 where
     D: Dimension + RemoveAxis,
 {

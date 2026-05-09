@@ -222,7 +222,7 @@ pub async fn run(
     let config: Option<Arc<AppConfig>> = config.map(Arc::new);
 
     // Start the solar event task
-    let rfi_zeroing = tokio::spawn(crate::tasks::solar_event_task(
+    let rfi_zeroing = tokio::spawn(crate::zeroing::solar_event_task(
         Arc::clone(&metrics),
         config.map(|c| Arc::clone(&c)),
     ));

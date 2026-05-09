@@ -194,6 +194,18 @@ where
         num_frames
     }
 
+    /// Clear all frames from the buffer.
+    pub fn clear(&self) -> usize {
+        // First flush everything that's pending
+        let mut num_frames = self.flush();
+        // Now remove everything from the buffer
+        let mut guard = self.frames.write();
+        num_frames += guard.len();
+        guard.clear();
+
+        num_frames
+    }
+
     /// Add an array to a frame and push the frame to the buffer if it is full.
     ///
     /// If the frame is full, push directly to the buffer. Otherwise, store

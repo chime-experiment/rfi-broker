@@ -3,6 +3,8 @@ use ndarray::{Array, Array1, Array2, ArrayD, ArrayView, Axis, Dimension, RemoveA
 
 use eyre::bail;
 
+// TODO: make a tokio task to monitor this metric and update at some cadence
+
 /// Compute the likelihood that an input is bad, based on the `bad_feed_counts`
 /// dataset in the shared state.
 ///
@@ -19,18 +21,6 @@ pub fn compute_bad_input_likelihood(
     if arr.ndim() != 3 {
         bail!("expected array with dimension 3, got {:#}", arr.ndim());
     }
-    // Grab the buffer if it exists
-    // let Some(buf) = &state.bad_feed_counts.get() else {
-    //     bail!("data buffer not initialized");
-    // };
-
-    // let Some(arr) = &buf.stack_array(0) else {
-    //     bail!("data buffer is empty");
-    // };
-
-    // let Some(mask) = &buf.stack_mask() else {
-    //     bail!("data buffer incorrectly formatted");
-    // };
 
     // Compute the per-feed likelihood metric. This is guaranteed
     // to succeed because call to `&buf.stack` above would have

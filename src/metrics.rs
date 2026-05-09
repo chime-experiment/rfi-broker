@@ -3,6 +3,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use parking_lot::Mutex;
+
+use eyre::ensure;
+
 /// Tracker for a sample loss count/fraction.
 // NB: it would be good for this to be a rolling metric
 // or something, instead of looking at the entire duration.
@@ -67,6 +71,57 @@ impl RFIZeroingTracker {
     }
 }
 
+/// Implementation of an exponentially-weighted moving
+/// average for independent values in a Vec.
+pub struct Ewma<const N: u16> {
+    alpha: f32,
+    ialpha: f32,
+    value: Mutex<Option<Vec<f32>>>,
+}
+
+impl<const N: u16> Default for Ewma<N> {
+    fn default() -> Self {
+        let alpha = 2f32 / (f32::from(N) + 1.0);
+        Self {
+            alpha,
+            ialpha: 1.0 - alpha,
+            value: Mutex::new(None),
+        }
+    }
+}
+
+impl<const N: u16> Ewma<N> {
+    /// Return the current value
+    pub fn value(&self) -> Option<Vec<f32>> {
+        self.value.lock().clone()
+    }
+
+    /// Update the current value.
+    ///
+    /// If this is the first sample, the value will be
+    /// equal to this sample.
+    pub fn update(&self, sample: &[f32]) -> eyre::Result<()> {
+        let mut guard = self.value.lock();
+
+        if let Some(value) = guard.as_mut() {
+            ensure!(
+                value.len() == sample.len(),
+                "length mismatch: expected {} got {}",
+                value.len(),
+                sample.len()
+            );
+            value
+                .iter_mut()
+                .zip(sample.iter())
+                .for_each(|(v, s)| *v = self.ialpha.mul_add(*v, self.alpha * *s));
+        } else {
+            *guard = Some(sample.to_vec());
+        }
+
+        Ok(())
+    }
+}
+
 /// Shared application state for metrics.
 ///
 /// Intended to be wrapped in a [`std::sync::Arc`] to be shared
@@ -78,6 +133,8 @@ pub struct Metrics {
     /// Current state of RFI zeroing, according to
     /// this broker
     pub rfi_zeroing: RFIZeroingTracker,
+    /// Current likelihood that a given input is bad
+    pub bad_input_likelihood: Ewma<256>,
 }
 
 /// Alias for shared metrics type.
@@ -100,6 +157,10 @@ mod tests {
             tracker.inc_lost();
         }
 
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "values are too small for precision loss"
+        )]
         let frac = tracker.lost() as f64 / tracker.total() as f64;
 
         // Check that the fraction is lost is as expected,

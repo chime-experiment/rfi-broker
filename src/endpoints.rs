@@ -12,7 +12,6 @@ use {ndarray_npy::write_npy, serde::Deserialize};
 
 use crate::datastate::SharedDataState;
 use crate::metrics::SharedMetrics;
-use crate::stats;
 
 /// Return an error as an ``INTERNAL_SERVER_ERROR``.
 #[allow(
@@ -79,21 +78,11 @@ pub async fn metrics(
 ///
 /// Required for external compatibility.
 pub async fn dump_bad_input_likelihood(
-    State(state): State<SharedDataState>,
+    State(metrics): State<SharedMetrics>,
 ) -> Result<String, (StatusCode, String)> {
-    let Some(buf) = &state.bad_feed_counts.get() else {
+    let Some(metric) = metrics.bad_input_likelihood.value() else {
         return Err(handler_err("data buffer not initialized"));
     };
-
-    let Some(arr) = &buf.stack_array(0) else {
-        return Err(handler_err("data buffer is empty"));
-    };
-
-    let Some(mask) = &buf.stack_mask() else {
-        return Err(handler_err("data buffer incorrectly formatted"));
-    };
-
-    let metric = stats::compute_bad_input_likelihood(arr, mask).map_err(handler_err)?;
 
     let metric_fmt = metric
         .iter()
@@ -108,36 +97,21 @@ pub async fn dump_bad_input_likelihood(
 ///
 /// Returns `500` if any error occurs when computing the metric.
 pub async fn get_bad_input_likelihood(
-    State(state): State<SharedDataState>,
+    State(metrics): State<SharedMetrics>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-    let Some(buf) = &state.bad_feed_counts.get() else {
+    let Some(metric) = metrics.bad_input_likelihood.value() else {
         return Err(handler_err("data buffer not initialized"));
     };
 
-    let Some(arr) = &buf.stack_array(0) else {
-        return Err(handler_err("data buffer is empty"));
-    };
+    // Package the result with its name and serialize
+    let mut result = serde_json::Map::new();
 
-    let Some(mask) = &buf.stack_mask() else {
-        return Err(handler_err("data buffer incorrectly formatted"));
-    };
+    result.insert(
+        "bad_input_likelihood".into(),
+        serde_json::to_value(&metric).map_err(handler_err)?,
+    );
 
-    let metric = stats::compute_bad_input_likelihood(arr, mask);
-
-    match metric {
-        Ok(metric) => {
-            // Package the result with its name and serialize
-            let mut result = serde_json::Map::new();
-
-            result.insert(
-                "bad_input_likelihood".into(),
-                serde_json::to_value(&metric).map_err(handler_err)?,
-            );
-
-            Ok::<_, (StatusCode, String)>(Json(result))
-        }
-        Err(e) => Err(handler_err(e)),
-    }
+    Ok::<_, (StatusCode, String)>(Json(result))
 }
 
 /// `GET /last-frame` — snapshot most recent frame in all dataset ring buffers.

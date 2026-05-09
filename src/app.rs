@@ -66,13 +66,7 @@ async fn debug_log_middleware(
 /// can read them.
 fn make_router(state: SharedDataState, metrics: SharedMetrics) -> Router {
     // router using information from the data state
-    let state_router = Router::new()
-        .route("/metadata", get(endpoints::metadata))
-        .route(
-            "/bad_input_likelihood",
-            get(endpoints::get_bad_input_likelihood),
-        )
-        .route("/", get(endpoints::dump_bad_input_likelihood));
+    let state_router = Router::new().route("/metadata", get(endpoints::metadata));
 
     // debug-only endpoints
     #[cfg(debug_assertions)]
@@ -86,6 +80,11 @@ fn make_router(state: SharedDataState, metrics: SharedMetrics) -> Router {
     // router for metrics
     let metrics_router = Router::new()
         .route("/metrics", get(endpoints::metrics))
+        .route(
+            "/bad_input_likelihood",
+            get(endpoints::get_bad_input_likelihood),
+        )
+        .route("/", get(endpoints::dump_bad_input_likelihood))
         .with_state(metrics);
 
     let router = Router::new().merge(state_router).merge(metrics_router);

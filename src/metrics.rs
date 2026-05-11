@@ -7,6 +7,9 @@ use parking_lot::Mutex;
 
 use eyre::ensure;
 
+/// Bad input likelihood loookback num samples
+const BAD_INPUT_LIKELIHOOD_LOOKBACK: u16 = 256;
+
 /// Tracker for a sample loss count/fraction.
 // NB: it would be good for this to be a rolling metric
 // or something, instead of looking at the entire duration.
@@ -134,7 +137,7 @@ pub struct Metrics {
     /// this broker
     pub rfi_zeroing: RFIZeroingTracker,
     /// Current likelihood that a given input is bad
-    pub bad_input_likelihood: Ewma<256>,
+    pub bad_input_likelihood: Ewma<BAD_INPUT_LIKELIHOOD_LOOKBACK>,
 }
 
 /// Alias for shared metrics type.

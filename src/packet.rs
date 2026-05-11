@@ -14,6 +14,14 @@ use eyre::{WrapErr, bail};
 /// are discarded.
 const EXPECTED_VERSION: u16 = 2;
 
+/// Packet body type specification
+pub mod packet_types {
+    pub type FreqIdType = u32;
+    pub type FracFlaggedType = f32;
+    pub type SkTildeType = f32;
+    pub type BadFeedType = u8;
+}
+
 /// Decoded header from a UDP datagram.
 ///
 /// `#[derive(BinRead)]` with `#[br(little)]` instructs `binrw` to deserialize
@@ -69,16 +77,16 @@ impl Header {
 pub struct Body {
     /// List of frequencies contained in this packet
     #[br(count = hdr.num_local_freq)]
-    pub freq_ids: Vec<u32>,
+    pub freq_ids: Vec<packet_types::FreqIdType>,
     /// Fraction of flagged samples per frequency
     #[br(count = hdr.num_local_freq)]
-    pub frac_flagged: Vec<f32>,
+    pub frac_flagged: Vec<packet_types::FracFlaggedType>,
     /// Average SK per frequency
     #[br(count = hdr.num_local_freq)]
-    pub sktilde_avg: Vec<f32>,
+    pub sktilde_avg: Vec<packet_types::SkTildeType>,
     /// Bad feed counter per frequency and element
     #[br(count = hdr.num_local_freq * hdr.num_elements)]
-    pub bad_feed_counts: Vec<u8>,
+    pub bad_feed_counts: Vec<packet_types::BadFeedType>,
 }
 
 /// Entire packet

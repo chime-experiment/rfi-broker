@@ -14,7 +14,7 @@ use std::sync::{Arc, OnceLock};
 use eyre::OptionExt;
 use parking_lot::Mutex;
 
-use crate::packet::{Body, Header, Packet};
+use crate::packet::{Body, Header, Packet, packet_types};
 use crate::ringbuffer::RingBuffer;
 
 /// Shared state for application data.
@@ -28,9 +28,9 @@ pub struct DataState {
     pub metadata: OnceLock<Mutex<Header>>,
     /// Ringbuffers holding associated datasets from the
     /// packet body. Implements `Default`.
-    pub frac_flagged: OnceLock<RingBuffer<f32>>,
-    pub sktilde_avg: OnceLock<RingBuffer<f32>>,
-    pub bad_feed_counts: OnceLock<RingBuffer<u8>>,
+    pub frac_flagged: OnceLock<RingBuffer<packet_types::FracFlaggedType>>,
+    pub sktilde_avg: OnceLock<RingBuffer<packet_types::SkTildeType>>,
+    pub bad_feed_counts: OnceLock<RingBuffer<packet_types::BadFeedType>>,
 }
 
 pub type SharedDataState = Arc<DataState>;
@@ -54,16 +54,22 @@ impl DataState {
 
         // Push to each ringbuffer, initializing if this is the first push
         self.frac_flagged
-            .get_or_init(|| RingBuffer::<f32>::new(vec![header.num_total_freq as usize]))
+            .get_or_init(|| {
+                RingBuffer::<packet_types::FracFlaggedType>::new(vec![
+                    header.num_total_freq as usize,
+                ])
+            })
             .push_vec(body.frac_flagged, id, &indices, axis)?;
 
         self.sktilde_avg
-            .get_or_init(|| RingBuffer::<f32>::new(vec![header.num_total_freq as usize]))
+            .get_or_init(|| {
+                RingBuffer::<packet_types::SkTildeType>::new(vec![header.num_total_freq as usize])
+            })
             .push_vec(body.sktilde_avg, id, &indices, axis)?;
 
         self.bad_feed_counts
             .get_or_init(|| {
-                RingBuffer::<u8>::new(vec![
+                RingBuffer::<packet_types::BadFeedType>::new(vec![
                     header.num_total_freq as usize,
                     header.num_elements as usize,
                 ])

@@ -101,7 +101,7 @@ impl DataState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_fixtures;
+    use crate::packet::tests::make_packets;
 
     /// Test that packets are successfully parsed and pushed into
     /// the corresponding [`RingBuffer`]s.
@@ -110,7 +110,7 @@ mod tests {
         let state = DataState::default();
 
         // Produce and push a couple of packets
-        let packets = test_fixtures::make_packets(4, 2)?;
+        let packets = make_packets(4, 2)?;
         assert_eq!(packets.len(), 2);
 
         for packet in &packets {

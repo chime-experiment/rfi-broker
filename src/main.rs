@@ -21,9 +21,6 @@ mod ringbuffer;
 mod stats;
 mod tasks;
 
-#[cfg(test)]
-pub(crate) mod test_fixtures;
-
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 

@@ -119,13 +119,53 @@ impl Packet {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
-    use crate::test_fixtures;
 
+    /// Generate `n` [`packet:Packet`]s with increasing frequency IDs.
+    pub fn make_packets(nfreq: u32, npackets: u32) -> eyre::Result<Vec<Packet>> {
+        if !nfreq.is_multiple_of(npackets) {
+            bail!(
+                "Number of packets: {npackets} does not evenly divide number of frequencies: {nfreq}"
+            );
+        }
+
+        #[allow(
+            clippy::integer_division,
+            reason = "already checked that these are divisible"
+        )]
+        let nfreq_per_packet = nfreq / npackets;
+
+        let mut packets = Vec::<Packet>::new();
+
+        for i in 0..npackets {
+            let header = Header {
+                version: 2_u16,
+                payload_length: 0_u32, // placeholder
+                sk_step: 8_u32,
+                num_elements: 10_u32,
+                samples_per_data_set: 32_u32,
+                num_total_freq: nfreq,
+                num_local_freq: nfreq_per_packet,
+                frames_per_packet: 2_u32,
+                seq_num: 0_i64,
+            };
+
+            let body = Body {
+                freq_ids: (i * nfreq_per_packet..(i + 1) * nfreq_per_packet).collect(),
+                frac_flagged: vec![0.2; nfreq_per_packet as usize],
+                sktilde_avg: vec![1.3; nfreq_per_packet as usize],
+                bad_feed_counts: vec![0u8; 10 * nfreq_per_packet as usize],
+            };
+
+            packets.push(Packet { header, body });
+        }
+
+        Ok(packets)
+    }
     #[test]
     fn test_bin_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
-        let packets = test_fixtures::make_packets(3, 1)?;
+        let packets = make_packets(3, 1)?;
         let packet = packets
             .first()
             .ok_or("packet was not constructed successfully")?;

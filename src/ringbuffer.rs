@@ -11,13 +11,16 @@ use parking_lot::{Mutex, RwLock};
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
+use tokio::sync::broadcast;
+
 use eyre::{OptionExt, WrapErr, bail, eyre};
 
 use ndarray::{Array2, ArrayD, ArrayViewD, Axis, IxDyn};
 use num_traits::Num;
 
 /// Maximum number of array frames retained in the ring buffer
-const RING_CAPACITY: usize = 64;
+const RING_CAPACITY: usize = 32;
+const RING_TX_CAPACITY: usize = 32;
 /// Constants managing how/when a partial frame should stop accumulating
 /// samples and get moved into the buffer
 const PARTIAL_FRAME_CAPACITY: usize = 8;
@@ -26,7 +29,7 @@ const MIN_FRAME_SAMPLE_COUNT: u64 = 1;
 /// Single [`RingBuffer`] frame.
 ///
 /// Contains an array, mask, and ID.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Frame<T> {
     /// Numeric identifier
     pub sequence_id: u64,
@@ -72,7 +75,7 @@ where
     /// than the split. `indices` references the indices along the split
     /// axis where `chunk` should be written to. `indices` are not required
     /// to be contiguous.
-    fn insert(&mut self, indices: &[usize], chunk: &ArrayViewD<T>) -> eyre::Result<bool> {
+    fn insert_chunk(&mut self, indices: &[usize], chunk: &ArrayViewD<T>) -> eyre::Result<bool> {
         if chunk
             .shape()
             .get(self.axis)
@@ -115,7 +118,7 @@ where
     }
 }
 
-type SharedFrame<T> = Arc<Frame<T>>;
+pub type SharedFrame<T> = Arc<Frame<T>>;
 
 /// Ring buffer of decoded frames, shared across tasks.
 ///
@@ -123,7 +126,7 @@ type SharedFrame<T> = Arc<Frame<T>>;
 /// construction. Pushes that violate this are dropped.
 ///
 /// The inner [`RwLock`] is held only for push/snapshot operations.
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct RingBuffer<T> {
     /// Expected shape of each frame
     frame_shape: Vec<usize>,
@@ -131,6 +134,8 @@ pub struct RingBuffer<T> {
     partial_frames: Mutex<BTreeMap<u64, Frame<T>>>,
     /// Ring buffer of the most recently received array frames
     frames: RwLock<VecDeque<SharedFrame<T>>>,
+    /// List of channels subscribed to new frame events
+    tx: broadcast::Sender<SharedFrame<T>>,
 }
 
 impl<T> RingBuffer<T>
@@ -139,29 +144,23 @@ where
 {
     /// Create a new ringbuffer with a fixed shape.
     pub fn new(frame_shape: Vec<usize>) -> Self {
+        let (tx, _) = broadcast::channel(RING_TX_CAPACITY);
         Self {
             frame_shape,
             partial_frames: Mutex::new(BTreeMap::<u64, Frame<T>>::new()),
             frames: RwLock::new(VecDeque::<SharedFrame<T>>::with_capacity(RING_CAPACITY)),
+            tx,
         }
     }
 
-    /// Returns a cloned snapshot of all frames currently in the buffer.
+    /// Subscribe to a new frame event broadcast.
     ///
-    /// This actually just clones the ``Arc`` which wraps the frame,
-    /// so overhead is extremely minimal.
-    ///
-    /// The lock is released before returning.
-    fn snapshot(&self) -> Vec<SharedFrame<T>> {
-        let guard = self.frames.read();
-        // produces at-most 2 contiguous slices, so faster to copy
-        let (a, b) = guard.as_slices();
-        let mut snapshot = Vec::with_capacity(RING_CAPACITY);
-        // insert the slices
-        snapshot.extend_from_slice(a);
-        snapshot.extend_from_slice(b);
-
-        snapshot
+    /// The subscriber received a new ``Arc<Frame>`` each time the
+    /// new frame is created and pushed to the buffer.
+    // TODO: separate the Frame generator from the ringbuffer and just make the
+    // buffer a subscriber for the frame generator
+    pub fn subscribe(&self) -> broadcast::Receiver<SharedFrame<T>> {
+        self.tx.subscribe()
     }
 
     /// Return a copy of the most recent frame.
@@ -173,11 +172,19 @@ where
 
     /// Acquire the lock and push a frame to the buffer.
     fn lock_push(&self, frame: Frame<T>) {
-        let mut guard = self.frames.write();
-        if guard.len() == RING_CAPACITY {
-            guard.pop_front(); // evict oldest
+        let frame = Arc::new(frame);
+        // push the frame to the buffer, only holding lock
+        // as long as needed
+        {
+            let mut guard = self.frames.write();
+            if guard.len() == RING_CAPACITY {
+                guard.pop_front(); // evict oldest
+            }
+            guard.push_back(Arc::clone(&frame));
         }
-        guard.push_back(Arc::new(frame));
+        // send the frame to all subscribers. `clone` is automatically
+        // called by all receivers
+        let _ = self.tx.send(frame);
     }
 
     /// Push all partial frames into the buffer.
@@ -267,7 +274,7 @@ where
         })?;
 
         // Push data to the frame
-        let frame_ready: bool = frame.insert(indices, &array.view())?;
+        let frame_ready: bool = frame.insert_chunk(indices, &array.view())?;
 
         // Remove the frame from the partial map and push
         // to the ringbuffer
@@ -306,6 +313,24 @@ where
             ArrayD::from_shape_vec(shape, vec).wrap_err("failed to construct array from vec")?;
 
         self.push_array(&arr, id, indices, axis)
+    }
+
+    /// Returns a cloned snapshot of all frames currently in the buffer.
+    ///
+    /// This actually just clones the ``Arc`` which wraps the frame,
+    /// so overhead is extremely minimal.
+    ///
+    /// The lock is released before returning.
+    fn snapshot(&self) -> Vec<SharedFrame<T>> {
+        let guard = self.frames.read();
+        // produces at-most 2 contiguous slices, so faster to copy
+        let (a, b) = guard.as_slices();
+        let mut snapshot = Vec::with_capacity(RING_CAPACITY);
+        // insert the slices
+        snapshot.extend_from_slice(a);
+        snapshot.extend_from_slice(b);
+
+        snapshot
     }
 
     /// Return an `N+1` dimensional [`ArrayD`] stacked over an axis, or `None`
@@ -366,6 +391,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::assert_abs_diff_eq;
     use ndarray::s;
 
     #[allow(
@@ -395,6 +421,46 @@ mod tests {
         // Make sure that the input values are as-expected
         let frame = &buf.last().unwrap().array;
         assert_eq!(frame, expected_arr);
+
+        Ok(())
+    }
+
+    #[allow(
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "casts on small positive integers"
+    )]
+    #[tokio::test]
+    /// Test that subscribers received a frame as expected, and that both the
+    /// pushed and sent frames match
+    async fn test_subscribe() -> Result<(), Box<dyn std::error::Error>> {
+        let frame_shape = vec![3, 12];
+        // Create a new empty buffer
+        let buf = RingBuffer::<f32>::new(frame_shape);
+        // Subscribe to the buffer for new frame events
+        let mut rx1 = buf.subscribe();
+        let mut rx2 = buf.subscribe();
+
+        // Expected array which will be pushed to the buffer in chunks
+        let expected_arr = ArrayD::<f32>::from_shape_fn(IxDyn(&[3, 12]), |idx| idx[0] as f32);
+
+        for (i, row_view) in expected_arr.axis_iter(Axis(0)).enumerate() {
+            // There shouldn't be anything in the buffer yet
+            assert_eq!(buf.len(), 0);
+            let chunk: Vec<f32> = row_view.iter().copied().collect();
+            buf.push_vec(chunk, 0_u64, &[i], 0)?;
+        }
+        // After the last push, there should now be a frame
+        // in the buffer
+        assert_eq!(buf.len(), 1);
+
+        // Confirm that the subscriber has received the new frame
+        let frame1: SharedFrame<f32> = rx1.recv().await?;
+        let frame2: SharedFrame<f32> = rx2.recv().await?;
+
+        assert_abs_diff_eq!(frame1.array, expected_arr);
+        assert_abs_diff_eq!(frame2.array, expected_arr);
+        assert_eq!(*frame1, *frame2);
 
         Ok(())
     }

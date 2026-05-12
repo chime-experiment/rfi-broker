@@ -1,8 +1,7 @@
 //! Tasks implementing repeating async events.
 //!
 //! # Tasks
-//! - ``solar_event_task``: temporarily disables kotekan RFI flagging around
-//!   solar transit
+//! - ``solar_event_task``: temporarily disables kotekan RFI flagging around solar transit
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -16,8 +15,82 @@ use eyre::{OptionExt, WrapErr, bail, eyre};
 
 use serde_json::json;
 
+use ndarray::Ix2;
+
 use crate::config::SharedAppConfig;
+use crate::datastate::SharedDataState;
 use crate::metrics::SharedMetrics;
+
+/// Task to update the `bad_input_likelihood` metric every time a new
+/// frame is generated
+pub async fn bad_input_task(state: SharedDataState, metrics: SharedMetrics) -> eyre::Result<()> {
+    // Subscribe to the correct state buffer, waiting until some data exists
+    let buf = loop {
+        if let Some(buf) = state.bad_feed_counts.get() {
+            break buf;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    };
+    let mut event_rx = buf.subscribe();
+
+    // Get the number of trials per sample from metadata. metadata should
+    // always be set by this point, but loop just in case
+    let ntrials_per_sample: u32 = loop {
+        if let Some(meta) = state.metadata.get() {
+            break meta.lock().frames_per_packet;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    };
+
+    // Wait for new data frames to arrive and handl accordingly
+    loop {
+        let frame = event_rx
+            .recv()
+            .await
+            .wrap_err("error receiving new frame event")?;
+
+        // Convert the dynamically-sized array into a 2D array, which should be
+        // guaranteed to succeed
+        let Some(arr) = frame.array
+            .view()
+            .into_dimensionality::<Ix2>()
+            .inspect_err(|err| tracing::error!(error = ?err, "failed to cast expected 2D array into 2 dimensions"))
+            .ok()
+        else {
+            continue
+        };
+
+        // Account for the fact that some frequencies might be missing
+        let ntrials = frame.mask.iter().map(|&b| u32::from(b)).sum::<u32>() * ntrials_per_sample;
+
+        // Compute the binomial test for this frame. `p` is derived for 3-sigma deviations
+        // for a single-sided test
+        // TODO: make these values configurable somehow
+        let sigma = 3.0;
+        let alpha = 3.0;
+        let beta = 1.5;
+        let Some(update_val) =
+            crate::stats::sum_poissonbeta_greater(&arr, sigma, ntrials, alpha, beta)
+                .inspect_err(|err| tracing::error!(error = ?err, "failed to compute bintest"))
+                .ok()
+        else {
+            continue;
+        };
+
+        // Update the exponentially-weighted moving average
+        if let Some(sl) = update_val.as_slice() {
+            metrics
+                .bad_input_likelihood
+                .update(sl)
+                .inspect_err(
+                    |err| tracing::warn!(error = ?err, "failed to update bad input metric"),
+                )
+                .ok();
+        } else {
+            tracing::info!("got an empty result from the binomial test");
+        }
+    }
+}
 
 /// Get the seconds until a future unix time.
 ///

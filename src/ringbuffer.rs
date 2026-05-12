@@ -15,8 +15,11 @@ use tokio::sync::broadcast;
 
 use eyre::{OptionExt, WrapErr, bail, eyre};
 
-use ndarray::{Array2, ArrayD, ArrayViewD, Axis, IxDyn};
+use ndarray::{ArrayD, ArrayViewD, Axis, IxDyn};
 use num_traits::Num;
+
+#[cfg(any(debug_assertions, test))]
+use ndarray::Array2;
 
 /// Maximum number of array frames retained in the ring buffer
 const RING_CAPACITY: usize = 32;
@@ -157,17 +160,8 @@ where
     ///
     /// The subscriber received a new ``Arc<Frame>`` each time the
     /// new frame is created and pushed to the buffer.
-    // TODO: separate the Frame generator from the ringbuffer and just make the
-    // buffer a subscriber for the frame generator
     pub fn subscribe(&self) -> broadcast::Receiver<SharedFrame<T>> {
         self.tx.subscribe()
-    }
-
-    /// Return a copy of the most recent frame.
-    ///
-    /// The lock is released before returning.
-    pub fn last(&self) -> Option<SharedFrame<T>> {
-        self.frames.read().back().cloned()
     }
 
     /// Acquire the lock and push a frame to the buffer.
@@ -314,6 +308,37 @@ where
 
         self.push_array(&arr, id, indices, axis)
     }
+}
+
+/// Implements methods that are only used for debugging. This includes
+/// buffer metadata and options to copy a single frame or the entire
+/// buffer for inspection.
+#[cfg(any(debug_assertions, test))]
+impl<T> RingBuffer<T>
+where
+    T: Clone,
+{
+    /// Get the length, or number of frames in the buffer.
+    pub fn len(&self) -> usize {
+        self.frames.read().len()
+    }
+
+    /// Get the number of frames in the buffer queue.
+    pub fn queue_len(&self) -> usize {
+        self.partial_frames.lock().len()
+    }
+
+    /// Get the buffer frame shape
+    pub const fn shape(&self) -> &Vec<usize> {
+        &self.frame_shape
+    }
+
+    /// Return a copy of the most recent frame.
+    ///
+    /// The lock is released before returning.
+    pub fn last(&self) -> Option<SharedFrame<T>> {
+        self.frames.read().back().cloned()
+    }
 
     /// Returns a cloned snapshot of all frames currently in the buffer.
     ///
@@ -364,27 +389,6 @@ where
             .collect();
 
         ndarray::Array2::<u8>::from_shape_vec((nrows, ncols), flat_vec).ok()
-    }
-}
-
-#[cfg(any(debug_assertions, test))]
-impl<T> RingBuffer<T>
-where
-    T: Clone,
-{
-    /// Get the length, or number of frames in the buffer.
-    pub fn len(&self) -> usize {
-        self.frames.read().len()
-    }
-
-    /// Get the number of frames in the buffer queue.
-    pub fn queue_len(&self) -> usize {
-        self.partial_frames.lock().len()
-    }
-
-    /// Get the buffer frame shape
-    pub const fn shape(&self) -> &Vec<usize> {
-        &self.frame_shape
     }
 }
 

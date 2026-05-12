@@ -1,11 +1,12 @@
 //! Axum endpoints and associated functions.
 #[cfg(debug_assertions)]
-use std::fmt::Write;
-use std::path::Path;
+use {
+    axum::extract::Query,
+    ndarray::Axis,
+    std::{fmt::Write, path::Path},
+};
 
-use axum::{Json, extract::Query, extract::State, http::StatusCode, response::IntoResponse};
-
-use ndarray::Axis;
+use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 
 #[cfg(debug_assertions)]
 use {ndarray_npy::write_npy, serde::Deserialize};

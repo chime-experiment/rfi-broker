@@ -14,11 +14,11 @@ use std::sync::Arc;
 
 use eyre::WrapErr;
 
+use axum::{Router, routing::get};
 #[cfg(debug_assertions)]
-use axum::middleware::{self, Next};
-use axum::{
-    Router,
-    routing::{get, post},
+use {
+    axum::middleware::{self, Next},
+    axum::routing::post,
 };
 
 use tokio::net::{TcpListener, UdpSocket};

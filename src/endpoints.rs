@@ -206,18 +206,28 @@ pub async fn write_data(
     }
     if let Some(sktilde_avg) = state.sktilde_avg.get()
         && let Some(arr) = sktilde_avg.stack_array(0)
+        && let Some(mask) = sktilde_avg.stack_mask()
     {
         let mut path = params.path.clone();
         path.push_str("/sktilde_avg.npy");
         write_npy(path, &arr).map_err(handler_err)?;
+        // write the mask out as well
+        let mut path = params.path.clone();
+        path.push_str("/sktilde_avg_mask.npy");
+        write_npy(path, &mask).map_err(handler_err)?;
     }
 
     if let Some(bad_feed_counts) = state.bad_feed_counts.get()
         && let Some(arr) = bad_feed_counts.stack_array(0)
+        && let Some(mask) = bad_feed_counts.stack_mask()
     {
         let mut path = params.path.clone();
         path.push_str("/bad_feed_counts.npy");
         write_npy(path, &arr).map_err(handler_err)?;
+        // write the mask
+        let mut path = params.path.clone();
+        path.push_str("/bad_feed_counts_mask.npy");
+        write_npy(path, &mask).map_err(handler_err)?;
     }
 
     Ok::<_, (StatusCode, String)>((StatusCode::OK, params.path.clone()))

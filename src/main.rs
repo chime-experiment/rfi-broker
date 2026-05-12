@@ -19,7 +19,7 @@ mod metrics;
 mod packet;
 mod ringbuffer;
 mod stats;
-mod zeroing;
+mod tasks;
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;

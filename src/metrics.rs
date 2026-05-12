@@ -1,4 +1,5 @@
-//! Application metrics state, including internal and Prometheus metrics.
+//! Application metrics and underlying implementations, including internal
+//! and Prometheus metrics.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -8,11 +9,9 @@ use parking_lot::Mutex;
 use eyre::ensure;
 
 /// Bad input likelihood loookback num samples
-const BAD_INPUT_LIKELIHOOD_LOOKBACK: u16 = 256;
+const BAD_INPUT_LIKELIHOOD_LOOKBACK: u16 = 64;
 
 /// Tracker for a sample loss count/fraction.
-// NB: it would be good for this to be a rolling metric
-// or something, instead of looking at the entire duration.
 #[derive(Default)]
 pub struct SampleLossTracker {
     total: AtomicU64,
@@ -77,14 +76,14 @@ impl RFIZeroingTracker {
 /// Implementation of an exponentially-weighted moving
 /// average for independent values in a Vec.
 pub struct Ewma<const N: u16> {
-    alpha: f32,
-    ialpha: f32,
-    value: Mutex<Option<Vec<f32>>>,
+    alpha: f64,
+    ialpha: f64,
+    value: Mutex<Option<Vec<f64>>>,
 }
 
 impl<const N: u16> Default for Ewma<N> {
     fn default() -> Self {
-        let alpha = 2f32 / (f32::from(N) + 1.0);
+        let alpha = 2f64 / (f64::from(N) + 1.0);
         Self {
             alpha,
             ialpha: 1.0 - alpha,
@@ -95,7 +94,7 @@ impl<const N: u16> Default for Ewma<N> {
 
 impl<const N: u16> Ewma<N> {
     /// Return the current value
-    pub fn value(&self) -> Option<Vec<f32>> {
+    pub fn value(&self) -> Option<Vec<f64>> {
         self.value.lock().clone()
     }
 
@@ -103,7 +102,7 @@ impl<const N: u16> Ewma<N> {
     ///
     /// If this is the first sample, the value will be
     /// equal to this sample.
-    pub fn update(&self, sample: &[f32]) -> eyre::Result<()> {
+    pub fn update(&self, sample: &[f64]) -> eyre::Result<()> {
         let mut guard = self.value.lock();
 
         if let Some(value) = guard.as_mut() {
@@ -125,6 +124,9 @@ impl<const N: u16> Ewma<N> {
     }
 }
 
+/// Alias for shared metrics type.
+pub type SharedMetrics = Arc<Metrics>;
+
 /// Shared application state for metrics.
 ///
 /// Intended to be wrapped in a [`std::sync::Arc`] to be shared
@@ -139,9 +141,6 @@ pub struct Metrics {
     /// Current likelihood that a given input is bad
     pub bad_input_likelihood: Ewma<BAD_INPUT_LIKELIHOOD_LOOKBACK>,
 }
-
-/// Alias for shared metrics type.
-pub type SharedMetrics = Arc<Metrics>;
 
 #[cfg(test)]
 mod tests {

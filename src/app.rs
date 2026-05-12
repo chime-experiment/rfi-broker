@@ -242,9 +242,15 @@ pub async fn run(
     let config: Option<Arc<AppConfig>> = config.map(Arc::new);
 
     // Start the solar event task
-    let rfi_zeroing = tokio::spawn(crate::zeroing::solar_event_task(
+    let rfi_zeroing = tokio::spawn(crate::tasks::solar_event_task(
         Arc::clone(&metrics),
         config.map(|c| Arc::clone(&c)),
+    ));
+
+    // Start the bad input task
+    let bad_inputs = tokio::spawn(crate::tasks::bad_input_task(
+        Arc::clone(&state),
+        Arc::clone(&metrics),
     ));
 
     // Construct the socket and start the packet handling task. If this becomes
@@ -266,5 +272,6 @@ pub async fn run(
         result = packet_handler => result?.wrap_err("packet handler failed"),
         result = http => result?.wrap_err("http server failed"),
         result = rfi_zeroing => result?.wrap_err("solar zeroing task failed"),
+        result = bad_inputs => result?.wrap_err("bad input metric task failed"),
     }
 }

@@ -10,6 +10,7 @@ chrono = "0.4.44"
 clap = { version = "4.6", features = ["derive"] }
 config = "0.15.22"
 eyre = "0.6.12"
+hotpath = "0.16"
 mimalloc = "0.1.50"
 ndarray = { version = "0.17.2", features = ["serde"] }
 ndarray-npy = "0.10.0"
@@ -25,6 +26,10 @@ tokio = { version = "1", features = ["full"] }
 tracing = { version = "0.1.44", features = ["release_max_level_info"] }
 tracing-journald = "0.3.2"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[features]
+hotpath = ["hotpath/hotpath"]
+hotpath-cpu = ["hotpath/hotpath-cpu"]
 
 [dev-dependencies]
 tracing-test = "0.2.6"

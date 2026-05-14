@@ -124,6 +124,7 @@ async fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Error> {
 ///
 /// Runs indefinitely - intended to be run with [`tokio::spawn`].
 /// Exits when all senders are dropped.
+#[hotpath::measure]
 async fn packet_handler_task(
     sock: UdpSocket,
     metrics: SharedMetrics,
@@ -232,6 +233,7 @@ async fn packet_handler_task(
 ///
 /// # Errors
 /// Errors if either address cannot be bound.
+#[hotpath::main]
 pub async fn run(
     http_addr: SocketAddr,
     udp_addr: SocketAddr,

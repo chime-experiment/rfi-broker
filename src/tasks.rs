@@ -23,6 +23,7 @@ use crate::metrics::SharedMetrics;
 
 /// Task to update the `bad_input_likelihood` metric every time a new
 /// frame is generated
+#[hotpath::measure]
 pub async fn bad_input_task(state: SharedDataState, metrics: SharedMetrics) -> eyre::Result<()> {
     // Subscribe to the correct state buffer, waiting until some data exists
     let buf = loop {

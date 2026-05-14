@@ -27,6 +27,7 @@ use eyre::WrapErr;
 /// The poisson distribution is used instead of a binomial test because n is large
 /// and p is small, and the poisson is slightly more computationally efficient
 /// to compute.
+#[hotpath::measure]
 pub fn sum_poissonbeta_greater(
     arr: &ArrayView2<u8>,
     sigma: f64,

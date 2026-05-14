@@ -87,7 +87,9 @@ pub async fn dump_bad_input_likelihood(
 
     let metric_fmt = metric
         .iter()
-        .map(|x| format!("{x:.2}"))
+        // the caller for this endpoint assumes a percentage value,
+        // while the likelihood is computed from 0.0 to 1.0.
+        .map(|x| format!("{:.2}", 100.0 * x))
         .collect::<Vec<_>>()
         .join(", ");
 

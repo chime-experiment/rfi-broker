@@ -1,5 +1,9 @@
+---
 name: rfi-receiver-deploy-docs
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
@@ -20,11 +24,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build docs
-        run: cargo doc --no-deps --docuent-private-items
+        run: cargo doc --no-deps --document-private-items
       - name: Add redirect index.html
         run: |
-          CRATE=$(echo '${{ github.repository }}' | cut -f2 -d"/" | tr '-' '_')
-          echo "<meta http-equiv=\"refresh\" content=\"0; url=${CRATE}/index.html\">" > target/doc/index.html
+          echo "<meta http-equiv=\"refresh\" content=\"0; url=rfi-receiver/index.html\">" \
+            > target/doc/index.html
           touch target/doc/.nojekyll
       - name: Fix permissions
         run: chmod -c -R +rX "target/doc/"
@@ -33,8 +37,9 @@ jobs:
         with:
           path: ./target/doc
 
-deploy:
+  deploy:
     needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

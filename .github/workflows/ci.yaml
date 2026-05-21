@@ -1,3 +1,4 @@
+---
 name: rfi-receiver-ci-tests
 on:
   pull_request:

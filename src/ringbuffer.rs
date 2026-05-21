@@ -1,8 +1,4 @@
-//! Generic shared ring buffer of decoded array frames.
-//!
-//! [`RingBuffer<T>`] is parameterised over the element type `T`, allowing
-//! separate typed buffers (e.g. `RingBuffer<f32>`, `RingBuffer<u8>`) to
-//! coexist without boxing or type erasure.
+//! Generic shared ring buffer of array frames.
 //!
 //! The shape and dimensions are fixed at construction time; frames with
 //! a mismatched shape are dropped on push.
@@ -160,11 +156,16 @@ where
     ///
     /// The subscriber received a new ``Arc<Frame>`` each time the
     /// new frame is created and pushed to the buffer.
+    ///
+    /// Because this sends an `Arc`, the underlying data array is not
+    /// cloned, making sharing cheap.
     pub fn subscribe(&self) -> broadcast::Receiver<SharedFrame<T>> {
         self.tx.subscribe()
     }
 
     /// Acquire the lock and push a frame to the buffer.
+    ///
+    /// Sends the pushed frame to all subscribers.
     fn lock_push(&self, frame: Frame<T>) {
         let frame = Arc::new(frame);
         // push the frame to the buffer, only holding lock

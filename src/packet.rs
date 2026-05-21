@@ -14,7 +14,10 @@ use eyre::{WrapErr, bail};
 /// are discarded.
 const EXPECTED_VERSION: u16 = 2;
 
-/// Packet body type specification
+/// Packet body type specification.
+///
+/// We only handle a single packet type, so there's no need for
+/// complicated trait implementations.
 pub mod packet_types {
     pub type FreqIdType = u32;
     pub type FracFlaggedType = f32;

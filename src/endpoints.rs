@@ -180,7 +180,7 @@ pub struct DumpParams {
 }
 
 #[cfg(debug_assertions)]
-pub async fn write_data(
+pub async fn write_buffers(
     Query(params): Query<DumpParams>,
     State(state): State<SharedDataState>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {

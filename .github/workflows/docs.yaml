@@ -1,0 +1,45 @@
+name: rfi-receiver-deploy-docs
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build docs
+        run: cargo doc --no-deps --docuent-private-items
+      - name: Add redirect index.html
+        run: |
+          CRATE=$(echo '${{ github.repository }}' | cut -f2 -d"/" | tr '-' '_')
+          echo "<meta http-equiv=\"refresh\" content=\"0; url=${CRATE}/index.html\">" > target/doc/index.html
+          touch target/doc/.nojekyll
+      - name: Fix permissions
+        run: chmod -c -R +rX "target/doc/"
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./target/doc
+
+deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

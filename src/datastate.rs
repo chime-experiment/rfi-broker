@@ -3,10 +3,10 @@
 //! Each buffer is independently typed and locked, so reads on one dataset
 //! never block reads or writes on another.
 //!
-//! This is an application-specific state, and not meant to be used as part
-//! of a library. It interfaces directly with [`crate::packet::Packet`].
+//! This is an application-specific state. It interfaces directly
+//! with [`crate::packet::Packet`].
 //!
-//! Designed to be wrapped in a [`std::sync::Arc`] for easy use with
+//! Designed to be wrapped in a [`std::sync::Arc`] for use with
 //! `axum` and `tokio`.
 
 use std::sync::{Arc, OnceLock};
@@ -21,6 +21,9 @@ use crate::ringbuffer::RingBuffer;
 ///
 /// Datasets are application specific, and matches those expected
 /// in [`crate::packet::Packet`].
+///
+/// Buffers are created lazily - only instantiated when a packet is
+/// received and parsed. This is implemented via a ``OnceLock``.
 #[derive(Default, Debug)]
 pub struct DataState {
     /// Fixed instance of the packet header, whose values should
@@ -86,7 +89,8 @@ impl DataState {
         Ok(id)
     }
 
-    /// Flush all buffers
+    /// Flush all buffers - that is, push all partial frames to
+    /// the buffer.
     pub fn flush(&self) -> usize {
         let mut nflushed = 0;
 
@@ -103,7 +107,8 @@ impl DataState {
         nflushed
     }
 
-    /// Clear all buffers
+    /// Clear all buffers - that is, remove all frames from
+    /// the buffer.
     pub fn clear(&self) -> usize {
         let mut ncleared = 0;
 

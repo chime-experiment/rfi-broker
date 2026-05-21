@@ -62,7 +62,7 @@ async fn debug_log_middleware(
 
 /// Builds a [`Router`] containing all the endpoints we'd like to enable.
 ///
-/// `state` and `metrics` are injected as Axum [`State`]s so handlers
+/// `state` and `metrics` are injected as Axum [`axum::extract::State`]s so handlers
 /// can read them.
 fn make_router(state: SharedDataState, metrics: SharedMetrics) -> Router {
     // router using information from the data state
@@ -72,7 +72,7 @@ fn make_router(state: SharedDataState, metrics: SharedMetrics) -> Router {
     #[cfg(debug_assertions)]
     let state_router = state_router
         .route("/last-frame", get(endpoints::last_frame))
-        .route("/write-data", post(endpoints::write_data));
+        .route("/write-buffers", post(endpoints::write_buffers));
 
     // Include the state
     let state_router = state_router.with_state(state);
@@ -123,7 +123,6 @@ async fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Error> {
 /// Drains a UDP socket buffer and pushes packets to the [`DataState`].
 ///
 /// Runs indefinitely - intended to be run with [`tokio::spawn`].
-/// Exits when all senders are dropped.
 async fn packet_handler_task(
     sock: UdpSocket,
     metrics: SharedMetrics,
@@ -227,11 +226,15 @@ async fn packet_handler_task(
     }
 }
 
-/// Spawns the UDP listener and HTTP server as ndependent tasks,
-/// then waits for either to exit.
+/// Spawns all program tasks, including:
+/// - rfi solar enable/disable task
+/// - bad input metric computation task
+/// - packet recv task
+/// - http server
 ///
 /// # Errors
-/// Errors if either address cannot be bound.
+/// - Errors if either the http or UDP recv address cannot be bound.
+/// - Errors if any task fails
 pub async fn run(
     http_addr: SocketAddr,
     udp_addr: SocketAddr,

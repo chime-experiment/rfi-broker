@@ -3,6 +3,7 @@
 //! # Tasks
 //! - ``solar_event_task``: temporarily disables kotekan RFI flagging around solar transit
 
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
@@ -17,16 +18,15 @@ use serde_json::json;
 
 use ndarray::Ix2;
 
-use crate::config::SharedAppConfig;
-use crate::datastate::SharedDataState;
-use crate::metrics::SharedMetrics;
+use crate::config::AppConfig;
+use crate::state::{Buffers, Metrics};
 
 /// Task to update the `bad_input_likelihood` metric every time a new
 /// frame is generated
-pub async fn bad_input_task(state: SharedDataState, metrics: SharedMetrics) -> eyre::Result<()> {
+pub async fn bad_input_task(buffers: Arc<Buffers>, metrics: Arc<Metrics>) -> eyre::Result<()> {
     // Subscribe to the correct state buffer, waiting until some data exists
     let buf = loop {
-        if let Some(buf) = state.bad_feed_counts.get() {
+        if let Some(buf) = buffers.bad_feed_counts.get() {
             break buf;
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -36,7 +36,7 @@ pub async fn bad_input_task(state: SharedDataState, metrics: SharedMetrics) -> e
     // Get the number of trials per sample from metadata. metadata should
     // always be set by this point, but loop just in case
     let ntrials_per_sample: u32 = loop {
-        if let Some(meta) = state.metadata.get() {
+        if let Some(meta) = buffers.metadata.get() {
             break meta.lock().frames_per_packet;
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -191,8 +191,8 @@ async fn post_event(
 /// Errors if computing solar noon fails, or the telescope coordinates
 /// are invalid.
 pub async fn solar_event_task(
-    metrics: SharedMetrics,
-    config: Option<SharedAppConfig>,
+    metrics: Arc<Metrics>,
+    config: Option<Arc<AppConfig>>,
 ) -> eyre::Result<()> {
     // If either `config` is None, or either of the required config entries
     // is None, this task is enter a permanent pending state.

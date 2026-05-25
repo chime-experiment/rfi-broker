@@ -11,8 +11,7 @@ use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 #[cfg(debug_assertions)]
 use {ndarray_npy::write_npy, serde::Deserialize};
 
-use crate::datastate::SharedDataState;
-use crate::metrics::SharedMetrics;
+use crate::state::AppState;
 
 /// Return an error as an ``INTERNAL_SERVER_ERROR``.
 #[allow(
@@ -26,8 +25,8 @@ fn handler_err(e: impl ToString) -> (StatusCode, String) {
 /// `GET /meta` - snapshot of state metadata.
 ///
 /// Returns `500` if serialisation fails.
-pub async fn metadata(State(state): State<SharedDataState>) -> impl IntoResponse {
-    let Some(meta) = state.metadata.get() else {
+pub async fn metadata(State(state): State<AppState>) -> impl IntoResponse {
+    let Some(meta) = state.buffers.metadata.get() else {
         return Err::<_, (StatusCode, String)>((
             StatusCode::NO_CONTENT,
             "metadata not available".into(),
@@ -43,13 +42,13 @@ pub async fn metadata(State(state): State<SharedDataState>) -> impl IntoResponse
 ///
 /// Returns `500` if serialisation fails.
 pub async fn metrics(
-    State(metrics): State<SharedMetrics>,
+    State(state): State<AppState>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
     let mut result = serde_json::Map::new();
 
     // Track packets received and rejected
-    let rejected_samples: u64 = metrics.packet_loss.lost();
-    let total_samples: u64 = metrics.packet_loss.total();
+    let rejected_samples: u64 = state.metrics.packet_loss.lost();
+    let total_samples: u64 = state.metrics.packet_loss.total();
     result.insert(
         "rejected_sample_count".into(),
         serde_json::to_value(rejected_samples).map_err(handler_err)?,
@@ -59,8 +58,8 @@ pub async fn metrics(
         serde_json::to_value(total_samples).map_err(handler_err)?,
     );
 
-    let first_stage: bool = metrics.rfi_zeroing.first();
-    let second_stage: bool = metrics.rfi_zeroing.second();
+    let first_stage: bool = state.metrics.rfi_zeroing.first();
+    let second_stage: bool = state.metrics.rfi_zeroing.second();
     result.insert(
         "first_stage_enabled".into(),
         serde_json::to_value(first_stage).map_err(handler_err)?,
@@ -79,9 +78,9 @@ pub async fn metrics(
 ///
 /// Required for external compatibility.
 pub async fn dump_bad_input_likelihood(
-    State(metrics): State<SharedMetrics>,
+    State(state): State<AppState>,
 ) -> Result<String, (StatusCode, String)> {
-    let Some(metric) = metrics.bad_input_likelihood.value() else {
+    let Some(metric) = state.metrics.bad_input_likelihood.value() else {
         return Err(handler_err("data buffer not initialized"));
     };
 
@@ -100,9 +99,9 @@ pub async fn dump_bad_input_likelihood(
 ///
 /// Returns `500` if any error occurs when computing the metric.
 pub async fn get_bad_input_likelihood(
-    State(metrics): State<SharedMetrics>,
+    State(state): State<AppState>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-    let Some(metric) = metrics.bad_input_likelihood.value() else {
+    let Some(metric) = state.metrics.bad_input_likelihood.value() else {
         return Err(handler_err("data buffer not initialized"));
     };
 
@@ -121,13 +120,11 @@ pub async fn get_bad_input_likelihood(
 ///
 /// Only exists in debug builds
 #[cfg(debug_assertions)]
-pub async fn last_frame(
-    State(state): State<SharedDataState>,
-) -> Result<String, (StatusCode, String)> {
+pub async fn last_frame(State(state): State<AppState>) -> Result<String, (StatusCode, String)> {
     let mut out = String::new();
 
     // Dump all the current buffers
-    if let Some(frac_flagged) = state.frac_flagged.get() {
+    if let Some(frac_flagged) = state.buffers.frac_flagged.get() {
         writeln!(out, "-- frac_flagged --").map_err(handler_err)?;
         writeln!(out, "  frame_count : {:?}", frac_flagged.len()).map_err(handler_err)?;
         writeln!(out, "  frames_in_queue : {:?}", frac_flagged.queue_len()).map_err(handler_err)?;
@@ -140,7 +137,7 @@ pub async fn last_frame(
         writeln!(out).map_err(handler_err)?; // blank line
     }
 
-    if let Some(sktilde_avg) = state.sktilde_avg.get() {
+    if let Some(sktilde_avg) = state.buffers.sktilde_avg.get() {
         writeln!(out, "-- sktilde_avg --").map_err(handler_err)?;
         writeln!(out, "  frame_count : {:?}", sktilde_avg.len()).map_err(handler_err)?;
         writeln!(out, "  frames_in_queue : {:?}", sktilde_avg.queue_len()).map_err(handler_err)?;
@@ -153,7 +150,7 @@ pub async fn last_frame(
         writeln!(out).map_err(handler_err)?;
     }
 
-    if let Some(bad_feed_counts) = state.bad_feed_counts.get() {
+    if let Some(bad_feed_counts) = state.buffers.bad_feed_counts.get() {
         writeln!(out, "-- bad_feed_counts --").map_err(handler_err)?;
         writeln!(out, "  frame_count : {:?}", bad_feed_counts.len()).map_err(handler_err)?;
         writeln!(out, "  frames_in_queue : {:?}", bad_feed_counts.queue_len())
@@ -182,7 +179,7 @@ pub struct DumpParams {
 #[cfg(debug_assertions)]
 pub async fn write_buffers(
     Query(params): Query<DumpParams>,
-    State(state): State<SharedDataState>,
+    State(state): State<AppState>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
     // validate the provided path
     let path = Path::new(&params.path);
@@ -207,7 +204,7 @@ pub async fn write_buffers(
             path.display()
         )));
     }
-    if let Some(sktilde_avg) = state.sktilde_avg.get()
+    if let Some(sktilde_avg) = state.buffers.sktilde_avg.get()
         && let Some(arr) = sktilde_avg.stack_array(0)
         && let Some(mask) = sktilde_avg.stack_mask()
     {
@@ -220,7 +217,7 @@ pub async fn write_buffers(
         write_npy(path, &mask).map_err(handler_err)?;
     }
 
-    if let Some(bad_feed_counts) = state.bad_feed_counts.get()
+    if let Some(bad_feed_counts) = state.buffers.bad_feed_counts.get()
         && let Some(arr) = bad_feed_counts.stack_array(0)
         && let Some(mask) = bad_feed_counts.stack_mask()
     {

@@ -25,10 +25,9 @@ use tokio::net::{TcpListener, UdpSocket};
 use tokio::time::{Duration, Instant, sleep_until};
 
 use crate::config::AppConfig;
-use crate::datastate::{DataState, SharedDataState};
 use crate::endpoints;
-use crate::metrics::{Metrics, SharedMetrics};
 use crate::packet::Packet;
+use crate::state::AppState;
 
 /// Size in MB for the UDP socket buffer
 const UDP_BUF_SIZE_MB: usize = 8;
@@ -64,30 +63,24 @@ async fn debug_log_middleware(
 ///
 /// `state` and `metrics` are injected as Axum [`axum::extract::State`]s so handlers
 /// can read them.
-fn make_router(state: SharedDataState, metrics: SharedMetrics) -> Router {
+fn make_router(state: AppState) -> Router {
     // router using information from the data state
-    let state_router = Router::new().route("/metadata", get(endpoints::metadata));
-
-    // debug-only endpoints
-    #[cfg(debug_assertions)]
-    let state_router = state_router
-        .route("/last-frame", get(endpoints::last_frame))
-        .route("/write-buffers", post(endpoints::write_buffers));
-
-    // Include the state
-    let state_router = state_router.with_state(state);
-
-    // router for metrics
-    let metrics_router = Router::new()
+    let router = Router::new()
+        .route("/metadata", get(endpoints::metadata))
         .route("/metrics", get(endpoints::metrics))
         .route(
             "/bad_input_likelihood",
             get(endpoints::get_bad_input_likelihood),
         )
-        .route("/", get(endpoints::dump_bad_input_likelihood))
-        .with_state(metrics);
+        .route("/", get(endpoints::dump_bad_input_likelihood));
 
-    let router = Router::new().merge(state_router).merge(metrics_router);
+    // debug-only endpoints
+    #[cfg(debug_assertions)]
+    let router = router
+        .route("/last-frame", get(endpoints::last_frame))
+        .route("/write-buffers", post(endpoints::write_buffers));
+
+    let router = router.with_state(state);
 
     #[cfg(debug_assertions)]
     let router = router.layer(middleware::from_fn(debug_log_middleware));
@@ -120,13 +113,13 @@ async fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Error> {
     Ok(socket)
 }
 
-/// Drains a UDP socket buffer and pushes packets to the [`DataState`].
+/// Drains a UDP socket buffer and pushes packets to the [`Buffers`].
 ///
 /// Runs indefinitely - intended to be run with [`tokio::spawn`].
 async fn packet_handler_task(
     sock: UdpSocket,
-    metrics: SharedMetrics,
-    state: SharedDataState,
+    buffers: Arc<crate::state::Buffers>,
+    metrics: Arc<crate::state::Metrics>,
 ) -> Result<(), std::io::Error> {
     // Record the first received packet
     let mut log_packet_recv: bool = true;
@@ -183,7 +176,7 @@ async fn packet_handler_task(
 
                     Packet::parse(buf.get(..nbytes).unwrap_or_default())
                         // push to state if parse was successful
-                        .and_then(|packet| state.push(packet))
+                        .and_then(|packet| buffers.push(packet))
                         .map_or_else(
                             // push failed - log it and move on
                             |e| {
@@ -198,7 +191,7 @@ async fn packet_handler_task(
 
             () = &mut flush_timer => {
                 // Flush any pending data to the state buffer and reset the timer
-                let nsamp = state.flush();
+                let nsamp = buffers.flush();
 
                 if nsamp > 0 {
                     tracing::info!(
@@ -212,7 +205,7 @@ async fn packet_handler_task(
 
             () = &mut clear_timer => {
                 // Remove all data from the state buffers
-                let nsamp = state.clear();
+                let nsamp = buffers.clear();
 
                 if nsamp > 0 {
                     tracing::info!("No packets received for {DATA_STATE_CLEAR_TIMEOUT_SECONDS}s - \
@@ -240,20 +233,19 @@ pub async fn run(
     udp_addr: SocketAddr,
     config: Option<AppConfig>,
 ) -> eyre::Result<()> {
-    let state: SharedDataState = Arc::new(DataState::default());
-    let metrics: SharedMetrics = Arc::new(Metrics::default());
+    let state = AppState::default();
     let config: Option<Arc<AppConfig>> = config.map(Arc::new);
 
     // Start the solar event task
     let rfi_zeroing = tokio::spawn(crate::tasks::solar_event_task(
-        Arc::clone(&metrics),
+        Arc::clone(&state.metrics),
         config.map(|c| Arc::clone(&c)),
     ));
 
     // Start the bad input task
     let bad_inputs = tokio::spawn(crate::tasks::bad_input_task(
-        Arc::clone(&state),
-        Arc::clone(&metrics),
+        Arc::clone(&state.buffers),
+        Arc::clone(&state.metrics),
     ));
 
     // Construct the socket and start the packet handling task. If this becomes
@@ -262,13 +254,13 @@ pub async fn run(
 
     let packet_handler = tokio::spawn(packet_handler_task(
         udp_sock,
-        Arc::clone(&metrics),
-        Arc::clone(&state),
+        Arc::clone(&state.buffers),
+        Arc::clone(&state.metrics),
     ));
 
     let http_listener = TcpListener::bind(http_addr).await?;
 
-    let http = tokio::spawn(axum::serve(http_listener, make_router(state, metrics)).into_future());
+    let http = tokio::spawn(axum::serve(http_listener, make_router(state)).into_future());
     tracing::info!(addr = ?http_addr, "started HTTP server:");
 
     tokio::select! {

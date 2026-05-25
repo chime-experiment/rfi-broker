@@ -1,4 +1,4 @@
-//! [`DataState`] implementation holding a ringbuffer for each dataset.
+//! [`Buffers`] implementation holding a ringbuffer for each dataset.
 //!
 //! Each buffer is independently typed and locked, so reads on one dataset
 //! never block reads or writes on another.
@@ -14,10 +14,31 @@ use std::sync::{Arc, OnceLock};
 use eyre::OptionExt;
 use parking_lot::Mutex;
 
+use axum::extract::FromRef;
+
+use crate::metrics;
 use crate::packet::{Body, Header, Packet, packet_types};
 use crate::ringbuffer::RingBuffer;
 
-/// Shared state for application data.
+/// Bad input likelihood loookback num samples
+const BAD_INPUT_LIKELIHOOD_LOOKBACK: u16 = 64;
+
+/// Store for application metrics.
+///
+/// Intended to be wrapped in a [`std::sync::Arc`] to be shared
+/// throughout async tasks.
+#[derive(Default)]
+pub struct Metrics {
+    /// Packet lost count tracker
+    pub packet_loss: metrics::SampleLossTracker,
+    /// Current state of RFI zeroing, according to
+    /// this broker
+    pub rfi_zeroing: metrics::RFIZeroingTracker,
+    /// Current likelihood that a given input is bad
+    pub bad_input_likelihood: metrics::MovingAverage<BAD_INPUT_LIKELIHOOD_LOOKBACK>,
+}
+
+/// Store for application data buffers.
 ///
 /// Datasets are application specific, and matches those expected
 /// in [`crate::packet::Packet`].
@@ -25,7 +46,7 @@ use crate::ringbuffer::RingBuffer;
 /// Buffers are created lazily - only instantiated when a packet is
 /// received and parsed. This is implemented via a ``OnceLock``.
 #[derive(Default, Debug)]
-pub struct DataState {
+pub struct Buffers {
     /// Fixed instance of the packet header, whose values should
     /// be set by the first valid packet
     pub metadata: OnceLock<Mutex<Header>>,
@@ -36,9 +57,7 @@ pub struct DataState {
     pub bad_feed_counts: OnceLock<RingBuffer<packet_types::BadFeedType>>,
 }
 
-pub type SharedDataState = Arc<DataState>;
-
-impl DataState {
+impl Buffers {
     /// Push a packet to the state, initializing on first push.
     pub fn push(&self, packet: Packet) -> eyre::Result<u64> {
         let body: Body = packet.body;
@@ -126,6 +145,15 @@ impl DataState {
     }
 }
 
+/// Shared application state.
+#[derive(Default, Clone, FromRef)]
+pub struct AppState {
+    /// Application metrics
+    pub metrics: Arc<Metrics>,
+    /// Application buffers
+    pub buffers: Arc<Buffers>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,7 +163,7 @@ mod tests {
     /// the corresponding [`RingBuffer`]s.
     #[test]
     fn test_push_packets() -> Result<(), Box<dyn std::error::Error>> {
-        let state = DataState::default();
+        let state = Buffers::default();
 
         // Produce and push a couple of packets
         let packets = make_packets(4, 2)?;

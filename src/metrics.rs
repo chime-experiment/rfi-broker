@@ -1,15 +1,11 @@
 //! Application metrics and underlying implementations, including internal
 //! and Prometheus metrics.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use parking_lot::Mutex;
 
 use eyre::ensure;
-
-/// Bad input likelihood loookback num samples
-const BAD_INPUT_LIKELIHOOD_LOOKBACK: u16 = 64;
 
 /// Tracker for a sample loss count/fraction.
 #[derive(Default)]
@@ -75,13 +71,13 @@ impl RFIZeroingTracker {
 
 /// Implementation of an exponentially-weighted moving
 /// average for independent values in a Vec.
-pub struct Ewma<const N: u16> {
+pub struct MovingAverage<const N: u16> {
     alpha: f64,
     ialpha: f64,
     value: Mutex<Option<Vec<f64>>>,
 }
 
-impl<const N: u16> Default for Ewma<N> {
+impl<const N: u16> Default for MovingAverage<N> {
     fn default() -> Self {
         let alpha = 2f64 / (f64::from(N) + 1.0);
         Self {
@@ -92,7 +88,7 @@ impl<const N: u16> Default for Ewma<N> {
     }
 }
 
-impl<const N: u16> Ewma<N> {
+impl<const N: u16> MovingAverage<N> {
     /// Return the current value
     pub fn value(&self) -> Option<Vec<f64>> {
         self.value.lock().clone()
@@ -122,24 +118,6 @@ impl<const N: u16> Ewma<N> {
 
         Ok(())
     }
-}
-
-/// Alias for shared metrics type.
-pub type SharedMetrics = Arc<Metrics>;
-
-/// Shared application state for metrics.
-///
-/// Intended to be wrapped in a [`std::sync::Arc`] to be shared
-/// throughout async tasks.
-#[derive(Default)]
-pub struct Metrics {
-    /// Packet lost count tracker
-    pub packet_loss: SampleLossTracker,
-    /// Current state of RFI zeroing, according to
-    /// this broker
-    pub rfi_zeroing: RFIZeroingTracker,
-    /// Current likelihood that a given input is bad
-    pub bad_input_likelihood: Ewma<BAD_INPUT_LIKELIHOOD_LOOKBACK>,
 }
 
 #[cfg(test)]

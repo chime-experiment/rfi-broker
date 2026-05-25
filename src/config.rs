@@ -32,9 +32,6 @@ pub struct AppConfig {
     pub zeroing: Option<RFIZeroingConfig>,
 }
 
-/// Shared [`AppConfig`] type.
-pub type SharedAppConfig = std::sync::Arc<AppConfig>;
-
 /// Load a [`AppConfig`] from a toml file.
 ///
 /// # Errors

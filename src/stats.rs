@@ -4,12 +4,14 @@
     reason = "generic implementations which might be used in the future"
 )]
 
+use parking_lot::Mutex;
+
 use ndarray::{
     Array, Array1, Array2, ArrayD, ArrayView, ArrayView2, Axis, Dimension, RemoveAxis, Zip,
 };
 use statrs::distribution::{Beta, ContinuousCDF, DiscreteCDF, Normal, Poisson};
 
-use eyre::WrapErr;
+use eyre::{WrapErr, ensure};
 
 /// Compute the likelihood that an input is bad, based on the `bad_feed_counts`
 /// dataset in the shared state.
@@ -112,6 +114,57 @@ where
             upper
         }
     })
+}
+
+/// Implementation of an exponentially-weighted moving
+/// average for independent values in a Vec.
+pub struct MovingAverage<const N: u16> {
+    alpha: f64,
+    ialpha: f64,
+    value: Mutex<Option<Vec<f64>>>,
+}
+
+impl<const N: u16> Default for MovingAverage<N> {
+    fn default() -> Self {
+        let alpha = 2f64 / (f64::from(N) + 1.0);
+        Self {
+            alpha,
+            ialpha: 1.0 - alpha,
+            value: Mutex::new(None),
+        }
+    }
+}
+
+impl<const N: u16> MovingAverage<N> {
+    /// Return the current value
+    pub fn value(&self) -> Option<Vec<f64>> {
+        self.value.lock().clone()
+    }
+
+    /// Update the current value.
+    ///
+    /// If this is the first sample, the value will be
+    /// equal to this sample.
+    pub fn update(&self, sample: &[f64]) -> eyre::Result<()> {
+        let mut guard = self.value.lock();
+
+        if let Some(value) = guard.as_mut() {
+            ensure!(
+                value.len() == sample.len(),
+                "length mismatch: expected {} got {}",
+                value.len(),
+                sample.len()
+            );
+            value
+                .iter_mut()
+                .zip(sample.iter())
+                .for_each(|(v, s)| *v = self.ialpha.mul_add(*v, self.alpha * *s));
+        } else {
+            *guard = Some(sample.to_vec());
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -19,11 +19,11 @@ use serde_json::json;
 use ndarray::Ix2;
 
 use crate::config::AppConfig;
-use crate::state::{Buffers, Metrics};
+use crate::state::{Buffers, Computed, Metrics};
 
 /// Task to update the `bad_input_likelihood` metric every time a new
 /// frame is generated
-pub async fn bad_input_task(buffers: Arc<Buffers>, metrics: Arc<Metrics>) -> eyre::Result<()> {
+pub async fn bad_input_task(buffers: Arc<Buffers>, computed: Arc<Computed>) -> eyre::Result<()> {
     // Subscribe to the correct state buffer, waiting until some data exists
     let buf = loop {
         if let Some(buf) = buffers.bad_feed_counts.get() {
@@ -79,7 +79,7 @@ pub async fn bad_input_task(buffers: Arc<Buffers>, metrics: Arc<Metrics>) -> eyr
 
         // Update the exponentially-weighted moving average
         if let Some(sl) = update_val.as_slice() {
-            metrics
+            computed
                 .bad_input_likelihood
                 .update(sl)
                 .inspect_err(

@@ -132,6 +132,8 @@ pub struct RingBuffer<T> {
     /// Store a handful of partial frames
     partial_frames: Mutex<BTreeMap<u64, Frame<T>>>,
     /// Ring buffer of the most recently received array frames
+    // NB: this currently isn't used for anything other than
+    // debugging, since tasks handler new frames with `subscribe`
     frames: RwLock<VecDeque<SharedFrame<T>>>,
     /// List of channels subscribed to new frame events
     tx: broadcast::Sender<SharedFrame<T>>,

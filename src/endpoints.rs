@@ -7,6 +7,7 @@ use {
 };
 
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
+use prometheus_client::encoding::text::encode;
 
 #[cfg(debug_assertions)]
 use {ndarray_npy::write_npy, serde::Deserialize};
@@ -38,17 +39,17 @@ pub async fn metadata(State(state): State<AppState>) -> impl IntoResponse {
     Ok::<_, (StatusCode, String)>(Json(meta))
 }
 
-/// `GET /metrics` - dumps the current prometheus metrics.
+/// `GET /metrics` - dumps metrics in a human-readable way.
 ///
 /// Returns `500` if serialisation fails.
-pub async fn metrics(
+pub async fn human_metrics(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
     let mut result = serde_json::Map::new();
 
     // Track packets received and rejected
-    let rejected_samples: u64 = state.metrics.packet_loss.lost();
-    let total_samples: u64 = state.metrics.packet_loss.total();
+    let rejected_samples: u64 = state.metrics.packet_loss.lost.get();
+    let total_samples: u64 = state.metrics.packet_loss.total.get();
     result.insert(
         "rejected_sample_count".into(),
         serde_json::to_value(rejected_samples).map_err(handler_err)?,
@@ -72,6 +73,25 @@ pub async fn metrics(
     Ok::<_, (StatusCode, String)>(Json(result))
 }
 
+/// `GET /metrics` - update and serialize Prometheus metrics.
+pub async fn metrics(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, impl IntoResponse> {
+    // update the prometheus representation of the bad input likelihood
+    if let Some(likelihood) = state.computed.bad_input_likelihood.value() {
+        state
+            .metrics
+            .bad_input_likelihood
+            .sync_from_slice(&likelihood)
+            .map_err(handler_err)?;
+    }
+
+    let mut body = String::new();
+    encode(&mut body, state.metrics.registry())
+        .map(|()| Ok::<_, (StatusCode, String)>((StatusCode::OK, body)))
+        .map_err(handler_err)?
+}
+
 /// `GET /` - dumps the result of `bad_input_likelihood`.
 ///
 /// Can return any error which occurs while computing the metric.
@@ -80,7 +100,7 @@ pub async fn metrics(
 pub async fn dump_bad_input_likelihood(
     State(state): State<AppState>,
 ) -> Result<String, (StatusCode, String)> {
-    let Some(metric) = state.metrics.bad_input_likelihood.value() else {
+    let Some(metric) = state.computed.bad_input_likelihood.value() else {
         return Err(handler_err("data buffer not initialized"));
     };
 
@@ -101,7 +121,7 @@ pub async fn dump_bad_input_likelihood(
 pub async fn get_bad_input_likelihood(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
-    let Some(metric) = state.metrics.bad_input_likelihood.value() else {
+    let Some(metric) = state.computed.bad_input_likelihood.value() else {
         return Err(handler_err("data buffer not initialized"));
     };
 

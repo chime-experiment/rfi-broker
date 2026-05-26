@@ -1,14 +1,9 @@
-//! [`Buffers`] implementation holding a ringbuffer for each dataset.
-//!
-//! Each buffer is independently typed and locked, so reads on one dataset
-//! never block reads or writes on another.
-//!
-//! This is an application-specific state. It interfaces directly
-//! with [`crate::packet::Packet`].
-//!
-//! Designed to be wrapped in a [`std::sync::Arc`] for use with
-//! `axum` and `tokio`.
+//! Implements a global [`AppState`] and member states, including
+//! - [`Computed`] - computed/derived quantities
+//! - [`Metrics`] - application Prometheus metrics
+//! - [`Buffers`] - ringbuffers for each incoming dataset
 
+use core::sync::atomic::AtomicU64;
 use std::sync::{Arc, OnceLock};
 
 use eyre::OptionExt;
@@ -16,26 +11,88 @@ use parking_lot::Mutex;
 
 use axum::extract::FromRef;
 
+use prometheus_client::registry::Registry;
+
 use crate::metrics;
 use crate::packet::{Body, Header, Packet, packet_types};
 use crate::ringbuffer::RingBuffer;
+use crate::stats;
 
 /// Bad input likelihood loookback num samples
 const BAD_INPUT_LIKELIHOOD_LOOKBACK: u16 = 64;
+
+/// Store for computed quantities.
+#[derive(Default)]
+pub struct Computed {
+    /// Current likelihood that a given input is bad
+    pub bad_input_likelihood: stats::MovingAverage<BAD_INPUT_LIKELIHOOD_LOOKBACK>,
+}
 
 /// Store for application metrics.
 ///
 /// Intended to be wrapped in a [`std::sync::Arc`] to be shared
 /// throughout async tasks.
-#[derive(Default)]
 pub struct Metrics {
+    /// Prometheus metrics registry
+    registry: Registry,
     /// Packet lost count tracker
     pub packet_loss: metrics::SampleLossTracker,
-    /// Current state of RFI zeroing, according to
-    /// this broker
+    /// Current state of RFI zeroing, according to this broker
     pub rfi_zeroing: metrics::RFIZeroingTracker,
-    /// Current likelihood that a given input is bad
-    pub bad_input_likelihood: metrics::MovingAverage<BAD_INPUT_LIKELIHOOD_LOOKBACK>,
+    /// Family of gauges storing the bad input likelihood. This stores the
+    /// metric as a Prometheus family, and should only copy values from
+    /// the actual computed metric
+    pub bad_input_likelihood: metrics::LazyGaugeFamily<f64, AtomicU64>,
+}
+
+impl Default for Metrics {
+    fn default() -> Self {
+        // Initialize members
+        let packet_loss = metrics::SampleLossTracker::default();
+        let rfi_zeroing = metrics::RFIZeroingTracker::default();
+        let bad_input_likelihood = metrics::LazyGaugeFamily::<f64, AtomicU64>::default();
+        let mut registry = Registry::default();
+
+        // populate registry
+        registry.register(
+            "rfireceiver_packets_received_total",
+            "Total packets received",
+            packet_loss.total.clone(),
+        );
+        registry.register(
+            "rfireceiver_packets_dropped_total",
+            "Total packets dropped",
+            packet_loss.lost.clone(),
+        );
+        registry.register(
+            "rfireceiver_rfi_zeroing_first_stage_enabled",
+            "Whether or not the receiver thinks the first stage excision is enabled",
+            rfi_zeroing.first_stage.clone(),
+        );
+        registry.register(
+            "rfireceiver_rfi_zeroing_second_stage_enabled",
+            "Whether or not the receiver thinks the second stage excision is enabled",
+            rfi_zeroing.second_stage.clone(),
+        );
+        registry.register(
+            "rfireceiver_bad_input_likelihood",
+            "Per-element likelihood that a given feed is bad",
+            bad_input_likelihood.values.clone(),
+        );
+
+        Self {
+            registry,
+            packet_loss,
+            rfi_zeroing,
+            bad_input_likelihood,
+        }
+    }
+}
+
+impl Metrics {
+    pub const fn registry(&self) -> &Registry {
+        &self.registry
+    }
 }
 
 /// Store for application data buffers.
@@ -45,6 +102,9 @@ pub struct Metrics {
 ///
 /// Buffers are created lazily - only instantiated when a packet is
 /// received and parsed. This is implemented via a ``OnceLock``.
+///
+/// Each buffer is independently typed and locked, so reads/writes on one
+/// dataset never blocks another.
 #[derive(Default, Debug)]
 pub struct Buffers {
     /// Fixed instance of the packet header, whose values should
@@ -146,10 +206,15 @@ impl Buffers {
 }
 
 /// Shared application state.
+///
+/// Intended to be wrapped with an [`Arc`] for use with
+/// [`tokio`] and [`axum`].
 #[derive(Default, Clone, FromRef)]
 pub struct AppState {
     /// Application metrics
     pub metrics: Arc<Metrics>,
+    /// Computed quantities,
+    pub computed: Arc<Computed>,
     /// Application buffers
     pub buffers: Arc<Buffers>,
 }

@@ -68,6 +68,7 @@ fn make_router(state: AppState) -> Router {
     let router = Router::new()
         .route("/metadata", get(endpoints::metadata))
         .route("/metrics", get(endpoints::metrics))
+        .route("/human-metrics", get(endpoints::human_metrics))
         .route(
             "/bad_input_likelihood",
             get(endpoints::get_bad_input_likelihood),
@@ -245,7 +246,7 @@ pub async fn run(
     // Start the bad input task
     let bad_inputs = tokio::spawn(crate::tasks::bad_input_task(
         Arc::clone(&state.buffers),
-        Arc::clone(&state.metrics),
+        Arc::clone(&state.computed),
     ));
 
     // Construct the socket and start the packet handling task. If this becomes

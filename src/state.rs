@@ -22,13 +22,16 @@ use crate::stats;
 const BAD_INPUT_LIKELIHOOD_LOOKBACK: u16 = 64;
 
 /// Store for computed quantities.
+///
+/// Intended to be wrapped in a [`std::sync::Arc`] to be shared
+/// throughout async tasks.
 #[derive(Default)]
 pub struct Computed {
     /// Current likelihood that a given input is bad
     pub bad_input_likelihood: stats::MovingAverage<BAD_INPUT_LIKELIHOOD_LOOKBACK>,
 }
 
-/// Store for application metrics.
+/// Store for prometheus metrics.
 ///
 /// Intended to be wrapped in a [`std::sync::Arc`] to be shared
 /// throughout async tasks.
@@ -43,6 +46,10 @@ pub struct Metrics {
     /// metric as a Prometheus family, and should only copy values from
     /// the actual computed metric
     pub bad_input_likelihood: metrics::LazyGaugeFamily<f64, AtomicU64>,
+    /// Family of gauges storing fraction of flagged samples
+    pub frac_flagged: metrics::LazyGaugeFamily<f64, AtomicU64>,
+    /// Family of gauges storing average SK
+    pub sktilde_avg: metrics::LazyGaugeFamily<f64, AtomicU64>,
 }
 
 impl Default for Metrics {
@@ -50,7 +57,9 @@ impl Default for Metrics {
         // Initialize members
         let packet_loss = metrics::SampleLossTracker::default();
         let rfi_zeroing = metrics::RFIZeroingTracker::default();
-        let bad_input_likelihood = metrics::LazyGaugeFamily::<f64, AtomicU64>::default();
+        let bad_input_likelihood = metrics::LazyGaugeFamily::<f64, AtomicU64>::new("feed_index");
+        let frac_flagged = metrics::LazyGaugeFamily::<f64, AtomicU64>::new("freq_id");
+        let sktilde_avg = metrics::LazyGaugeFamily::<f64, AtomicU64>::new("freq_id");
         let mut registry = Registry::default();
 
         // populate registry
@@ -79,17 +88,30 @@ impl Default for Metrics {
             "Per-element likelihood that a given feed is bad",
             bad_input_likelihood.values.clone(),
         );
+        registry.register(
+            "rfireceiver_frac_flagged",
+            "Fraction of flagged samples per frame for each frequency",
+            frac_flagged.values.clone(),
+        );
+        registry.register(
+            "rfireceiver_sktilde_avg",
+            "Average SK per frame for each frequency",
+            sktilde_avg.values.clone(),
+        );
 
         Self {
             registry,
             packet_loss,
             rfi_zeroing,
             bad_input_likelihood,
+            frac_flagged,
+            sktilde_avg,
         }
     }
 }
 
 impl Metrics {
+    /// registry is not directly accessible
     pub const fn registry(&self) -> &Registry {
         &self.registry
     }

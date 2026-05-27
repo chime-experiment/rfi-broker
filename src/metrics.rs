@@ -1,11 +1,12 @@
 //! Application metrics and underlying implementations, including internal
 //! and Prometheus metrics.
+use std::fmt::Write;
 use std::sync::OnceLock;
 
 use eyre::bail;
 
 use prometheus_client::{
-    encoding::EncodeLabelSet,
+    encoding::{EncodeLabelSet, LabelSetEncoder},
     metrics::{
         counter::Counter,
         family::Family,
@@ -65,19 +66,56 @@ impl RFIZeroingTracker {
     }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+/// Single metric label for a [`Family`] of metric types.
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct IndexLabel {
-    pub index: usize,
+    name: &'static str,
+    index: usize,
 }
 
-/// Lazy tracker for a family of Gauges.
+impl EncodeLabelSet for IndexLabel {
+    /// Custom encoder to handle label name and index values.
+    fn encode(&self, encoder: &mut LabelSetEncoder<'_>) -> Result<(), std::fmt::Error> {
+        let mut label = encoder.encode_label();
+
+        let mut key_encoder = label.encode_label_key()?;
+        key_encoder.write_str(self.name)?;
+
+        let mut value_encoder = key_encoder.encode_label_value()?;
+        value_encoder.write_str(&self.index.to_string())?;
+
+        Ok(())
+    }
+}
+
+/// Family of Gauges which are initialized lazily.
+///
+/// Tracks a family of Gauges with a single label name and label
+/// values corresponding to index of each Gauge value in a provided
+/// slice. Handles are not actually created until the first update
+/// slice is received.
 #[derive(Debug, Default)]
 pub struct LazyGaugeFamily<T, A>
 where
     Gauge<T, A>: Clone,
 {
+    label_name: &'static str,
     pub values: Family<IndexLabel, Gauge<T, A>>,
     handles: OnceLock<Vec<Gauge<T, A>>>,
+}
+
+impl<T, A> LazyGaugeFamily<T, A>
+where
+    Gauge<T, A>: Clone,
+    Family<IndexLabel, Gauge<T, A>>: Default,
+{
+    pub fn new(label_name: &'static str) -> Self {
+        Self {
+            label_name,
+            values: Family::<IndexLabel, Gauge<T, A>>::default(),
+            handles: OnceLock::new(),
+        }
+    }
 }
 
 impl<T, A> LazyGaugeFamily<T, A>
@@ -86,10 +124,22 @@ where
     A: Atomic<T>,
     Gauge<T, A>: Clone,
 {
-    pub fn sync_from_slice(&self, values: &[T]) -> eyre::Result<()> {
+    /// Update the value of each Gauge based on values contained
+    /// in a slice.
+    ///
+    /// Gauges are created the first time this is called, and all
+    /// subsequent calls must provide a slice with the same length
+    /// as the first call.
+    pub fn update_from_slice(&self, values: &[T]) -> eyre::Result<()> {
+        let name = self.label_name;
+
         let handles = self.handles.get_or_init(|| {
             (0..values.len())
-                .map(|index| self.values.get_or_create(&IndexLabel { index }).clone())
+                .map(|index| {
+                    self.values
+                        .get_or_create(&IndexLabel { name, index })
+                        .clone()
+                })
                 .collect()
         });
 
@@ -101,6 +151,8 @@ where
             );
         }
 
+        // Update gauge values. This is the only computation that happens
+        // beyond the first call
         for (gauge, value) in handles.iter().zip(values.iter().copied()) {
             gauge.set(value);
         }

@@ -64,7 +64,7 @@ async fn debug_log_middleware(
 /// `state` and `metrics` are injected as Axum [`axum::extract::State`]s so handlers
 /// can read them.
 fn make_router(state: AppState) -> Router {
-    // router using information from the data state
+    // router containing all release endpoints
     let router = Router::new()
         .route("/metadata", get(endpoints::metadata))
         .route("/metrics", get(endpoints::metrics))
@@ -84,6 +84,7 @@ fn make_router(state: AppState) -> Router {
     let router = router.with_state(state);
 
     #[cfg(debug_assertions)]
+    // enable middleware to log every endpoint request
     let router = router.layer(middleware::from_fn(debug_log_middleware));
 
     router

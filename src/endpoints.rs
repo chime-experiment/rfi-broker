@@ -82,7 +82,7 @@ pub async fn metrics(
         state
             .metrics
             .bad_input_likelihood
-            .sync_from_slice(&likelihood)
+            .update_from_slice(&likelihood)
             .map_err(handler_err)?;
     }
 

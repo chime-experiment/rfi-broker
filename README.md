@@ -50,6 +50,7 @@ are entirely remove in a `release` build.
 The following endpoints are exposed in all build profiles:
 - `/metadata`: most recent packet header
 - `/metrics`: prometheus metrics
+- `/human-metrics`: basic human-readable metrics
 - `/bad_input_likelihood`: per-input metric containing the likelihood of the input being corrupted
 - `/`: prints `bad_input_likelihood`
 

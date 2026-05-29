@@ -10,6 +10,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # CARGO_INCREMENTAL: 0
 
 jobs:
   clippy:
@@ -20,6 +21,11 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          # share cache across jobs
+          shared-key: "ci-cache"
+          # prevent cross-os issues
+          prefix-key: "${{ runner.os }}-rust wv"
       - run: cargo clippy -- -D warnings
       - run: cargo clippy --release -- -D warnings
 
@@ -35,6 +41,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
+        with:
+          # share cache across jobs
+          shared-key: "ci-cache"
+          # prevent cross-os issues
+          prefix-key: "${{ runner.os }}-rust wv"
       - name: Run unit tests in debug
         run: cargo nextest run --profile ci
       - name: Run unit tests in release

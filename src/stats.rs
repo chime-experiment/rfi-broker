@@ -9,52 +9,35 @@ use parking_lot::Mutex;
 use ndarray::{
     Array, Array1, Array2, ArrayD, ArrayView, ArrayView2, Axis, Dimension, RemoveAxis, Zip,
 };
-use statrs::distribution::{Beta, ContinuousCDF, DiscreteCDF, Normal, Poisson};
+use statrs::distribution::{ContinuousCDF, Gamma};
 
 use eyre::{WrapErr, ensure};
 
 /// Compute the likelihood that an input is bad, based on the `bad_feed_counts`
-/// dataset in the shared state.
 ///
-/// Counts are first summed over frequencies to produce a per-element trial
-/// success count (maximum count is equivalent to the number of frequencies
-/// times the number of trials per frame). The likelihood of a feed being an
-/// outlier (i.e., bad) is the result of the cdf of a Poisson distribution for
-/// the number of n-sigma outliers for that feed, fed into a Beta distribution
-/// which acts as a ramp function to suppress the "badness" likelihood of a
-/// handful of successes (because p is small and n is large, a dozen or so
-/// excursions results in a likelihood of ~0.5, which may not be representative
-/// of the metric that we want to produce).
-///
-/// The poisson distribution is used instead of a binomial test because n is large
-/// and p is small, and the poisson is slightly more computationally efficient
-/// to compute.
-pub fn sum_poissonbeta_greater(
+/// Counts are converted to a log scale by `ln_1p` then summed over frequencies,
+/// with the intention of penalizing single frequencies with large counts. The
+/// likelihood of a feed being an outlier is equivalent to the CDF of a Gamma
+/// distribution with size parameter tuned based on the number of input samples.
+pub fn logscore_gamma_greater(
     arr: &ArrayView2<u8>,
-    sigma: f64,
-    n: u32,
-    alpha: f64,
-    beta: f64,
+    nsamples: u32,
+    nfrac: f64,
+    theta: f64,
 ) -> eyre::Result<Array1<f64>> {
-    // Approximately convert sigma to p, then compute lambda from n*p
-    let ndist = Normal::new(0.0, 1.0).wrap_err("failed to construct normal distribution")?;
-    let lambda = ndist.sf(sigma) * f64::from(n);
-    // Create a poisson distribution and map the test across
-    // each element. Extremely cheap to initialize
-    let dist = Poisson::new(lambda).wrap_err("failed to construct new poisson distribution")?;
-    let bdist = Beta::new(alpha, beta).wrap_err("failed to construct new beta distribution")?;
+    // compute alpha for the gamma distribution
+    let alpha: f64 = (f64::from(nsamples) * nfrac).ln_1p();
+    let beta = 1.0 / theta;
+    // construct the gamma distribution
+    let dist = Gamma::new(alpha, beta).wrap_err("failed to construct gamma distribution")?;
 
-    // sum across frequencies
-    let counts: Array1<u64> = arr.fold_axis(Axis(0), 0u64, |&acc, &x| acc + u64::from(x));
+    // reduce over frequencies
+    let mut logscore: Array1<f64> =
+        arr.fold_axis(Axis(0), 0_f64, |&acc, &x| acc + f64::from(x).ln_1p());
+    // computes per-element CDF(k) in-place
+    logscore.mapv_inplace(|k: f64| dist.cdf(k));
 
-    // computes per-element beta_CDF(poisson_CDF(k - 1))
-    Ok(counts.mapv(|k: u64| {
-        if k == 0 {
-            0.0
-        } else {
-            bdist.cdf(dist.cdf(k - 1))
-        }
-    }))
+    Ok(logscore)
 }
 
 /// Compute a masked mean over the 0th axis of an [`ArrayD`].

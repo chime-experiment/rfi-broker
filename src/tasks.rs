@@ -33,15 +33,6 @@ pub async fn bad_input_task(buffers: Arc<Buffers>, computed: Arc<Computed>) -> e
     };
     let mut event_rx = buf.subscribe();
 
-    // Get the number of trials per sample from metadata. metadata should
-    // always be set by this point, but loop just in case
-    let ntrials_per_sample: u32 = loop {
-        if let Some(meta) = buffers.metadata.get() {
-            break meta.lock().frames_per_packet;
-        }
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    };
-
     // Wait for new data frames to arrive and handl accordingly
     loop {
         let frame = event_rx
@@ -61,18 +52,17 @@ pub async fn bad_input_task(buffers: Arc<Buffers>, computed: Arc<Computed>) -> e
         };
 
         // Account for the fact that some frequencies might be missing
-        let ntrials = frame.mask.iter().map(|&b| u32::from(b)).sum::<u32>() * ntrials_per_sample;
+        let nsamples = frame.mask.iter().map(|&b| u32::from(b)).sum::<u32>();
 
         // Compute the binomial test for this frame. `p` is derived for 3-sigma deviations
         // for a single-sided test
         // TODO: make these values configurable somehow
-        let sigma = 3.0;
-        let alpha = 3.0;
-        let beta = 1.5;
-        let Some(update_val) =
-            crate::stats::sum_poissonbeta_greater(&arr, sigma, ntrials, alpha, beta)
-                .inspect_err(|err| tracing::error!(error = ?err, "failed to compute bintest"))
-                .ok()
+        let nfrac: f64 = 0.3;
+        let theta: f64 = 1.5;
+
+        let Some(update_val) = crate::stats::logscore_gamma_greater(&arr, nsamples, nfrac, theta)
+            .inspect_err(|err| tracing::error!(error = ?err, "failed to compute bintest"))
+            .ok()
         else {
             continue;
         };

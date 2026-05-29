@@ -311,6 +311,11 @@ where
 
         self.push_array(&arr, id, indices, axis)
     }
+
+    /// Return a copy of the most recent frame
+    pub fn last_frame(&self) -> Option<SharedFrame<T>> {
+        self.frames.read().back().cloned()
+    }
 }
 
 /// Implements methods that are only used for debugging. This includes
@@ -319,7 +324,7 @@ where
 #[cfg(any(debug_assertions, test))]
 impl<T> RingBuffer<T>
 where
-    T: Clone,
+    T: Clone + Num,
 {
     /// Get the length, or number of frames in the buffer.
     pub fn len(&self) -> usize {
@@ -334,13 +339,6 @@ where
     /// Get the buffer frame shape
     pub const fn shape(&self) -> &Vec<usize> {
         &self.frame_shape
-    }
-
-    /// Return a copy of the most recent frame.
-    ///
-    /// The lock is released before returning.
-    pub fn last(&self) -> Option<SharedFrame<T>> {
-        self.frames.read().back().cloned()
     }
 
     /// Returns a cloned snapshot of all frames currently in the buffer.
@@ -381,7 +379,7 @@ where
         // Get a snapshot of the current buffer and release lock
         let snapshot: Vec<SharedFrame<T>> = self.snapshot();
         // Sort out the shape
-        let ncols = self.last()?.mask.len();
+        let ncols = self.last_frame()?.mask.len();
         let nrows = snapshot.len();
         // Masks are 1-dimensional, so concatenate the first axis. This means
         // that the sample axis is the slowest varying, so have to transpose
@@ -426,7 +424,7 @@ mod tests {
         assert_eq!(buf.len(), 1);
 
         // Make sure that the input values are as-expected
-        let frame = &buf.last().unwrap().array;
+        let frame = &buf.last_frame().unwrap().array;
         assert_eq!(frame, expected_arr);
 
         Ok(())

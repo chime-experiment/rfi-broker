@@ -3,7 +3,7 @@
 //! - [`Metrics`] - application Prometheus metrics
 //! - [`Buffers`] - ringbuffers for each incoming dataset
 
-use core::sync::atomic::AtomicU64;
+use core::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::{Arc, OnceLock};
 
 use eyre::OptionExt;
@@ -47,9 +47,9 @@ pub struct Metrics {
     /// the actual computed metric
     pub bad_input_likelihood: metrics::LazyGaugeFamily<f64, AtomicU64>,
     /// Family of gauges storing fraction of flagged samples
-    pub frac_flagged: metrics::LazyGaugeFamily<f64, AtomicU64>,
+    pub frac_flagged: metrics::LazyGaugeFamily<f32, AtomicU32>,
     /// Family of gauges storing average SK
-    pub sktilde_avg: metrics::LazyGaugeFamily<f64, AtomicU64>,
+    pub sktilde_avg: metrics::LazyGaugeFamily<f32, AtomicU32>,
 }
 
 impl Default for Metrics {
@@ -58,8 +58,8 @@ impl Default for Metrics {
         let packet_loss = metrics::SampleLossTracker::default();
         let rfi_zeroing = metrics::RFIZeroingTracker::default();
         let bad_input_likelihood = metrics::LazyGaugeFamily::<f64, AtomicU64>::new("feed_index");
-        let frac_flagged = metrics::LazyGaugeFamily::<f64, AtomicU64>::new("freq_id");
-        let sktilde_avg = metrics::LazyGaugeFamily::<f64, AtomicU64>::new("freq_id");
+        let frac_flagged = metrics::LazyGaugeFamily::<f32, AtomicU32>::new("freq_id");
+        let sktilde_avg = metrics::LazyGaugeFamily::<f32, AtomicU32>::new("freq_id");
         let mut registry = Registry::default();
 
         // populate registry

@@ -86,6 +86,28 @@ pub async fn metrics(
             .map_err(handler_err)?;
     }
 
+    if let Some(sktilde_avg) = state.buffers.sktilde_avg.get()
+        && let Some(frame) = sktilde_avg.last_frame()
+        && let Some(arr) = frame.array.as_slice()
+    {
+        state
+            .metrics
+            .sktilde_avg
+            .update_from_slice(arr)
+            .map_err(handler_err)?;
+    }
+
+    if let Some(frac_flagged) = state.buffers.frac_flagged.get()
+        && let Some(frame) = frac_flagged.last_frame()
+        && let Some(arr) = frame.array.as_slice()
+    {
+        state
+            .metrics
+            .frac_flagged
+            .update_from_slice(arr)
+            .map_err(handler_err)?;
+    }
+
     let mut body = String::new();
     encode(&mut body, state.metrics.registry())
         .map(|()| Ok::<_, (StatusCode, String)>((StatusCode::OK, body)))
@@ -150,7 +172,7 @@ pub async fn last_frame(State(state): State<AppState>) -> Result<String, (Status
         writeln!(out, "  frames_in_queue : {:?}", frac_flagged.queue_len()).map_err(handler_err)?;
         writeln!(out, "  frame_shape : {:?}", frac_flagged.shape()).map_err(handler_err)?;
 
-        if let Some(frame) = frac_flagged.last() {
+        if let Some(frame) = frac_flagged.last_frame() {
             writeln!(out, "{:#?}", frame.array).map_err(handler_err)?;
             writeln!(out, "{:?}", frame.mask).map_err(handler_err)?;
         }
@@ -163,7 +185,7 @@ pub async fn last_frame(State(state): State<AppState>) -> Result<String, (Status
         writeln!(out, "  frames_in_queue : {:?}", sktilde_avg.queue_len()).map_err(handler_err)?;
         writeln!(out, "  frame_shape : {:?}", sktilde_avg.shape()).map_err(handler_err)?;
 
-        if let Some(frame) = sktilde_avg.last() {
+        if let Some(frame) = sktilde_avg.last_frame() {
             writeln!(out, "{:#?}", frame.array).map_err(handler_err)?;
             writeln!(out, "{:?}", frame.mask).map_err(handler_err)?;
         }
@@ -177,7 +199,7 @@ pub async fn last_frame(State(state): State<AppState>) -> Result<String, (Status
             .map_err(handler_err)?;
         writeln!(out, "  frame_shape : {:?}", bad_feed_counts.shape()).map_err(handler_err)?;
 
-        if let Some(frame) = bad_feed_counts.last() {
+        if let Some(frame) = bad_feed_counts.last_frame() {
             let favg = frame.array.sum_axis(Axis(1));
             writeln!(out, "{favg:#?}").map_err(handler_err)?;
         }

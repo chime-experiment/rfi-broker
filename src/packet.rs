@@ -22,7 +22,7 @@ pub mod packet_types {
     pub type FreqIdType = u32;
     pub type FracFlaggedType = f32;
     pub type SkTildeType = f32;
-    pub type BadFeedType = u8;
+    pub type BadFeedType = f32;
 }
 
 /// Decoded header from a UDP datagram.
@@ -166,7 +166,10 @@ pub mod tests {
                 freq_ids: (i * nfreq_per_packet..(i + 1) * nfreq_per_packet).collect(),
                 frac_flagged: vec![0.2; nfreq_per_packet as usize],
                 sktilde_avg: vec![1.3; nfreq_per_packet as usize],
-                bad_feed_counts: vec![0u8; 10 * nfreq_per_packet as usize],
+                bad_feed_counts: vec![
+                    packet_types::BadFeedType::default();
+                    10 * nfreq_per_packet as usize
+                ],
             };
 
             packets.push(Packet { header, body });

@@ -9,6 +9,7 @@ use parking_lot::Mutex;
 use ndarray::{
     Array, Array1, Array2, ArrayD, ArrayView, ArrayView2, Axis, Dimension, RemoveAxis, Zip,
 };
+use num_traits::AsPrimitive;
 use statrs::distribution::{ContinuousCDF, Gamma};
 
 use eyre::{WrapErr, ensure};
@@ -19,12 +20,17 @@ use eyre::{WrapErr, ensure};
 /// with the intention of penalizing single frequencies with large counts. The
 /// likelihood of a feed being an outlier is equivalent to the CDF of a Gamma
 /// distribution with size parameter tuned based on the number of input samples.
-pub fn logscore_gamma_greater(
-    arr: &ArrayView2<u8>,
+///
+/// Accepts an array of any type which can be cast to `f64`, including `f64`.
+pub fn logscore_gamma_greater<T>(
+    arr: &ArrayView2<T>,
     nsamples: u32,
     nfrac: f64,
     theta: f64,
-) -> eyre::Result<Array1<f64>> {
+) -> eyre::Result<Array1<f64>>
+where
+    T: AsPrimitive<f64>,
+{
     // compute alpha for the gamma distribution
     let alpha: f64 = (f64::from(nsamples) * nfrac).ln_1p();
     let beta = 1.0 / theta;
@@ -32,8 +38,7 @@ pub fn logscore_gamma_greater(
     let dist = Gamma::new(alpha, beta).wrap_err("failed to construct gamma distribution")?;
 
     // reduce over frequencies
-    let mut logscore: Array1<f64> =
-        arr.fold_axis(Axis(0), 0_f64, |&acc, &x| acc + f64::from(x).ln_1p());
+    let mut logscore: Array1<f64> = arr.fold_axis(Axis(0), 0_f64, |&acc, &x| acc + x.as_().ln_1p());
     // computes per-element CDF(k) in-place
     logscore.mapv_inplace(|k: f64| dist.cdf(k));
 

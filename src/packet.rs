@@ -21,8 +21,7 @@ const EXPECTED_VERSION: u16 = 2;
 pub mod packet_types {
     pub type FreqIdType = u32;
     pub type FracFlaggedType = f32;
-    pub type SkTildeType = f32;
-    pub type BadFeedType = f32;
+    pub type SkType = f32;
 }
 
 /// Decoded header from a UDP datagram.
@@ -38,8 +37,6 @@ pub struct Header {
     pub version: u16,
     /// Total payload length
     pub payload_length: u32,
-    /// Time integration length of SK values.
-    pub sk_step: u32,
     /// Number of elements/inputs
     pub num_elements: u32,
     /// Number of FPGA time samples in each frame
@@ -86,10 +83,10 @@ pub struct Body {
     pub frac_flagged: Vec<packet_types::FracFlaggedType>,
     /// Average SK per frequency
     #[br(count = hdr.num_local_freq)]
-    pub sktilde_avg: Vec<packet_types::SkTildeType>,
+    pub sktilde_avg: Vec<packet_types::SkType>,
     /// Bad feed counter per frequency and element
     #[br(count = hdr.num_local_freq * hdr.num_elements)]
-    pub bad_feed_counts: Vec<packet_types::BadFeedType>,
+    pub skbar_avg: Vec<packet_types::SkType>,
 }
 
 /// Entire packet
@@ -153,7 +150,6 @@ pub mod tests {
             let header = Header {
                 version: 2_u16,
                 payload_length: 0_u32, // placeholder
-                sk_step: 8_u32,
                 num_elements: 10_u32,
                 samples_per_data_set: 32_u32,
                 num_total_freq: nfreq,
@@ -166,10 +162,7 @@ pub mod tests {
                 freq_ids: (i * nfreq_per_packet..(i + 1) * nfreq_per_packet).collect(),
                 frac_flagged: vec![0.2; nfreq_per_packet as usize],
                 sktilde_avg: vec![1.3; nfreq_per_packet as usize],
-                bad_feed_counts: vec![
-                    packet_types::BadFeedType::default();
-                    10 * nfreq_per_packet as usize
-                ],
+                skbar_avg: vec![packet_types::SkType::default(); 10 * nfreq_per_packet as usize],
             };
 
             packets.push(Packet { header, body });

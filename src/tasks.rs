@@ -26,7 +26,7 @@ use crate::state::{Buffers, Computed, Metrics};
 pub async fn bad_input_task(buffers: Arc<Buffers>, computed: Arc<Computed>) -> eyre::Result<()> {
     // Subscribe to the correct state buffer, waiting until some data exists
     let buf = loop {
-        if let Some(buf) = buffers.bad_feed_counts.get() {
+        if let Some(buf) = buffers.skbar_avg.get() {
             break buf;
         }
         tokio::time::sleep(Duration::from_secs(1)).await;

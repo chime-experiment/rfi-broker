@@ -135,8 +135,8 @@ pub struct Buffers {
     /// Ringbuffers holding associated datasets from the
     /// packet body. Implements `Default`.
     pub frac_flagged: OnceLock<RingBuffer<packet_types::FracFlaggedType>>,
-    pub sktilde_avg: OnceLock<RingBuffer<packet_types::SkTildeType>>,
-    pub bad_feed_counts: OnceLock<RingBuffer<packet_types::BadFeedType>>,
+    pub sktilde_avg: OnceLock<RingBuffer<packet_types::SkType>>,
+    pub skbar_avg: OnceLock<RingBuffer<packet_types::SkType>>,
 }
 
 impl Buffers {
@@ -167,18 +167,18 @@ impl Buffers {
 
         self.sktilde_avg
             .get_or_init(|| {
-                RingBuffer::<packet_types::SkTildeType>::new(vec![header.num_total_freq as usize])
+                RingBuffer::<packet_types::SkType>::new(vec![header.num_total_freq as usize])
             })
             .push_vec(body.sktilde_avg, id, &indices, axis)?;
 
-        self.bad_feed_counts
+        self.skbar_avg
             .get_or_init(|| {
-                RingBuffer::<packet_types::BadFeedType>::new(vec![
+                RingBuffer::<packet_types::SkType>::new(vec![
                     header.num_total_freq as usize,
                     header.num_elements as usize,
                 ])
             })
-            .push_vec(body.bad_feed_counts, id, &indices, axis)?;
+            .push_vec(body.skbar_avg, id, &indices, axis)?;
 
         // Update the metadata since we got here
         let meta = self
@@ -201,7 +201,7 @@ impl Buffers {
         if let Some(buf) = self.sktilde_avg.get() {
             nflushed += buf.flush();
         }
-        if let Some(buf) = self.bad_feed_counts.get() {
+        if let Some(buf) = self.skbar_avg.get() {
             nflushed += buf.flush();
         }
 
@@ -219,7 +219,7 @@ impl Buffers {
         if let Some(buf) = self.sktilde_avg.get() {
             ncleared += buf.clear();
         }
-        if let Some(buf) = self.bad_feed_counts.get() {
+        if let Some(buf) = self.skbar_avg.get() {
             ncleared += buf.clear();
         }
 
@@ -264,7 +264,7 @@ mod tests {
         assert!(state.metadata.get().is_some());
         assert!(state.frac_flagged.get().is_some());
         assert!(state.sktilde_avg.get().is_some());
-        assert!(state.bad_feed_counts.get().is_some());
+        assert!(state.skbar_avg.get().is_some());
 
         // Check that the metadata is what we expect
         let meta = state.metadata.get().ok_or("error getting metadata")?.lock();
@@ -290,15 +290,12 @@ mod tests {
             .get()
             .ok_or("error getting `sktilde_avg`")?;
 
-        let bad_feed_counts = state
-            .bad_feed_counts
-            .get()
-            .ok_or("error getting `bad_feed_counts`")?;
+        let skbar_avg = state.skbar_avg.get().ok_or("error getting `skbar_avg`")?;
 
         // Check that each buffer has the correct shape
         assert_eq!(*frac_flagged.shape(), [4]);
         assert_eq!(*sktilde_avg.shape(), [4]);
-        assert_eq!(*bad_feed_counts.shape(), [4, 10]);
+        assert_eq!(*skbar_avg.shape(), [4, 10]);
 
         // Check that a complete frame has been pushed to each buffer
         assert_eq!(frac_flagged.len(), 1);
@@ -307,8 +304,8 @@ mod tests {
         assert_eq!(sktilde_avg.len(), 1);
         assert_eq!(sktilde_avg.queue_len(), 0);
 
-        assert_eq!(bad_feed_counts.len(), 1);
-        assert_eq!(bad_feed_counts.queue_len(), 0);
+        assert_eq!(skbar_avg.len(), 1);
+        assert_eq!(skbar_avg.queue_len(), 0);
 
         Ok(())
     }

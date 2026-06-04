@@ -192,14 +192,13 @@ pub async fn last_frame(State(state): State<AppState>) -> Result<String, (Status
         writeln!(out).map_err(handler_err)?;
     }
 
-    if let Some(bad_feed_counts) = state.buffers.bad_feed_counts.get() {
-        writeln!(out, "-- bad_feed_counts --").map_err(handler_err)?;
-        writeln!(out, "  frame_count : {:?}", bad_feed_counts.len()).map_err(handler_err)?;
-        writeln!(out, "  frames_in_queue : {:?}", bad_feed_counts.queue_len())
-            .map_err(handler_err)?;
-        writeln!(out, "  frame_shape : {:?}", bad_feed_counts.shape()).map_err(handler_err)?;
+    if let Some(skbar_avg) = state.buffers.skbar_avg.get() {
+        writeln!(out, "-- skbar_avg --").map_err(handler_err)?;
+        writeln!(out, "  frame_count : {:?}", skbar_avg.len()).map_err(handler_err)?;
+        writeln!(out, "  frames_in_queue : {:?}", skbar_avg.queue_len()).map_err(handler_err)?;
+        writeln!(out, "  frame_shape : {:?}", skbar_avg.shape()).map_err(handler_err)?;
 
-        if let Some(frame) = bad_feed_counts.last_frame() {
+        if let Some(frame) = skbar_avg.last_frame() {
             let favg = frame.array.sum_axis(Axis(1));
             writeln!(out, "{favg:#?}").map_err(handler_err)?;
         }
@@ -259,16 +258,16 @@ pub async fn write_buffers(
         write_npy(path, &mask).map_err(handler_err)?;
     }
 
-    if let Some(bad_feed_counts) = state.buffers.bad_feed_counts.get()
-        && let Some(arr) = bad_feed_counts.stack_array(0)
-        && let Some(mask) = bad_feed_counts.stack_mask()
+    if let Some(skbar_avg) = state.buffers.skbar_avg.get()
+        && let Some(arr) = skbar_avg.stack_array(0)
+        && let Some(mask) = skbar_avg.stack_mask()
     {
         let mut path = params.path.clone();
-        path.push_str("/bad_feed_counts.npy");
+        path.push_str("/skbar_avg.npy");
         write_npy(path, &arr).map_err(handler_err)?;
         // write the mask
         let mut path = params.path.clone();
-        path.push_str("/bad_feed_counts_mask.npy");
+        path.push_str("/skbar_avg_mask.npy");
         write_npy(path, &mask).map_err(handler_err)?;
     }
 

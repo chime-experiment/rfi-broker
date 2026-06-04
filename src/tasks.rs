@@ -21,8 +21,8 @@ use ndarray::Ix2;
 use crate::config::AppConfig;
 use crate::state::{Buffers, Computed, Metrics};
 
-/// Task to update the `bad_input_likelihood` metric every time a new
-/// frame is generated
+/// Task to update the `bad_input_likelihood` metric every time a
+/// new frame is generated.
 pub async fn bad_input_task(buffers: Arc<Buffers>, computed: Arc<Computed>) -> eyre::Result<()> {
     // Subscribe to the correct state buffer, waiting until some data exists
     let buf = loop {
@@ -33,7 +33,7 @@ pub async fn bad_input_task(buffers: Arc<Buffers>, computed: Arc<Computed>) -> e
     };
     let mut event_rx = buf.subscribe();
 
-    // Wait for new data frames to arrive and handl accordingly
+    // Wait for new data frames to arrive and handle accordingly
     loop {
         let frame = event_rx
             .recv()
@@ -50,18 +50,12 @@ pub async fn bad_input_task(buffers: Arc<Buffers>, computed: Arc<Computed>) -> e
         else {
             continue
         };
+        // sort out how many frequencies were received
+        let k: u16 = frame.mask.iter().map(|&b| u16::from(b)).sum();
 
-        // Account for the fact that some frequencies might be missing
-        let nsamples = frame.mask.iter().map(|&b| u32::from(b)).sum::<u32>();
-
-        // Compute the binomial test for this frame. `p` is derived for 3-sigma deviations
-        // for a single-sided test
-        // TODO: make these values configurable somehow
-        let nfrac: f64 = 0.3;
-        let theta: f64 = 1.5;
-
-        let Some(update_val) = crate::stats::logscore_gamma_greater(&arr, nsamples, nfrac, theta)
-            .inspect_err(|err| tracing::error!(error = ?err, "failed to compute bintest"))
+        // compute the likelihood that a given feed is bad
+        let Some(update_val) = crate::stats::sk_fisher_chi2::<f32>(&arr, f32::from(k))
+            .inspect_err(|err| tracing::error!(error = ?err, "failed to compute chi2"))
             .ok()
         else {
             continue;
@@ -77,7 +71,7 @@ pub async fn bad_input_task(buffers: Arc<Buffers>, computed: Arc<Computed>) -> e
                 )
                 .ok();
         } else {
-            tracing::info!("got an empty result from the binomial test");
+            tracing::info!("got an empty result");
         }
     }
 }

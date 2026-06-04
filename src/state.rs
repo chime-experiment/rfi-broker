@@ -18,8 +18,8 @@ use crate::packet::{Body, Header, Packet, packet_types};
 use crate::ringbuffer::RingBuffer;
 use crate::stats;
 
-/// Bad input likelihood loookback num samples
-const BAD_INPUT_LIKELIHOOD_LOOKBACK: u16 = 128;
+/// Bad input likelihood lookback num samples
+const BAD_INPUT_LIKELIHOOD_LOOKBACK: u16 = 32;
 
 /// Store for computed quantities.
 ///

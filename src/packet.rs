@@ -84,7 +84,7 @@ pub struct Body {
     /// Average SK per frequency
     #[br(count = hdr.num_local_freq)]
     pub sktilde_avg: Vec<packet_types::SkType>,
-    /// Bad feed counter per frequency and element
+    /// Average SK per frequency and element
     #[br(count = hdr.num_local_freq * hdr.num_elements)]
     pub skbar_avg: Vec<packet_types::SkType>,
 }

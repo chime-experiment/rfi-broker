@@ -6,43 +6,95 @@
 
 use parking_lot::Mutex;
 
-use ndarray::{
-    Array, Array1, Array2, ArrayD, ArrayView, ArrayView2, Axis, Dimension, RemoveAxis, Zip,
-};
+use ndarray::{Array1, Array2, ArrayD, ArrayView2, Axis, Zip};
 use num_traits::AsPrimitive;
-use statrs::distribution::{ContinuousCDF, Gamma};
+use statrs::function::{erf, gamma};
 
-use eyre::{WrapErr, ensure};
+use eyre::{OptionExt, WrapErr, ensure};
 
-/// Compute the likelihood that an input is bad, based on the `bad_feed_counts`
+/// Computes the chi2 CDF of a fisher sum of p-values of gaussian-distributed
+/// spectral kurtosis data.
 ///
-/// Counts are converted to a log scale by `ln_1p` then summed over frequencies,
-/// with the intention of penalizing single frequencies with large counts. The
-/// likelihood of a feed being an outlier is equivalent to the CDF of a Gamma
-/// distribution with size parameter tuned based on the number of input samples.
-///
-/// Accepts an array of any type which can be cast to `f64`, including `f64`.
-pub fn logscore_gamma_greater<T>(
-    arr: &ArrayView2<T>,
-    nsamples: u32,
-    nfrac: f64,
-    theta: f64,
-) -> eyre::Result<Array1<f64>>
+/// A p-value is computed for each element in the 2D input, and is then summed
+/// across the 0th axis according to Fisher's method. Under assumed conditions,
+/// the fisher sum has a chi-squared distribution, the CDF of which is returned
+/// as a likelihood metric.
+pub fn sk_fisher_chi2<T>(arr: &ArrayView2<T>, k: T) -> eyre::Result<Array1<f64>>
 where
     T: AsPrimitive<f64>,
 {
-    // compute alpha for the gamma distribution
-    let alpha: f64 = (f64::from(nsamples) * nfrac).ln_1p();
-    let beta = 1.0 / theta;
-    // construct the gamma distribution
-    let dist = Gamma::new(alpha, beta).wrap_err("failed to construct gamma distribution")?;
+    // normal distribution parameters
+    const NORM_COEFF: f64 = 1.0 / std::f64::consts::SQRT_2;
 
-    // reduce over frequencies
-    let mut logscore: Array1<f64> = arr.fold_axis(Axis(0), 0_f64, |&acc, &x| acc + x.as_().ln_1p());
-    // computes per-element CDF(k) in-place
-    logscore.mapv_inplace(|k: f64| dist.cdf(k));
+    // array parameters
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "value too small for precision loss"
+    )]
+    let n = arr.ncols() as f64;
 
-    Ok(logscore)
+    // single-pass over rows to compute p-values and fisher sum
+    let mut metric = arr
+        .rows()
+        .into_iter()
+        .try_fold(Array1::<f64>::zeros(arr.ncols()), |mut acc, row| {
+            // ensure that the row is c-contigous. If so, `rowc` is just a cow
+            // view of `row`, so no copy is made.
+            let rowc = row.as_standard_layout();
+            let sl = rowc
+                .as_slice()
+                .ok_or_eyre("row is malformed - expected c-contiguous slice")?;
+
+            // compute the median and standard deviation of this row
+            let mu: f64 = median(sl);
+
+            let std_coeff: f64 = {
+                let sum_squared = rowc.fold(0.0, |acc, &val| {
+                    let d = val.as_() - mu;
+                    d.mul_add(d, acc)
+                });
+                let std = (sum_squared / n).sqrt();
+
+                NORM_COEFF / std
+            };
+            // variance is 0 - don't include this row
+            if std_coeff.is_infinite() || std_coeff.is_nan() {
+                return Ok(acc);
+            }
+
+            // elementwise p = 2.0 * SF(|x - mu|, 0, std)
+            // fisher metric is -2.0 * sum over rows of ln(p), but defer the
+            // multiplication by -2.0 to the pass where we compute `gamma_lr`
+            Zip::from(&mut acc).and(&rowc).for_each(|a, &val| {
+                // p-score takes the absolute-value of the centred `val` and passes it
+                // to the SF of a normal distribution with standard deviation `std`.
+                // these two operation can be combined in a slightly simplified way:
+                // z = |x - mu| / (std * sqrt(2))
+                // SF = 0.5 * erfc(z)
+                // p = max(2.0 * SF, epsilon)
+                let z = (val.as_() - mu).abs() * std_coeff;
+                let p = erf::erfc(z).max(1.0e-50);
+                // Fisher sum log(p)
+                *a += p.ln();
+            });
+
+            Ok::<_, eyre::Report>(acc)
+        })
+        .wrap_err("failed to construct Fisher sum")?;
+
+    // chi2 of the fisher metric
+    // df = 2k, so a = df/2 = k
+    let k: f64 = k.as_();
+    metric.mapv_inplace(|x: f64| {
+        // `checked_gamma_lr` errors if `x` is either 0 or infinite, so
+        // x <= 0 -> g = 0.0 and x == inf -> g = 1.0
+        // Fisher sum is multiplied by -2.0, which isn't done earlier, but the
+        // input to the lower gamma func is divided by 2.0 so just use
+        // the negative of the input
+        gamma::checked_gamma_lr(k, -x).unwrap_or(if x.is_finite() { 0.0 } else { 1.0 })
+    });
+
+    Ok(metric)
 }
 
 /// Compute a masked mean over the 0th axis of an [`ArrayD`].
@@ -75,33 +127,35 @@ fn masked_mean(arr: &ArrayD<u8>, mask: &Array2<u8>, axis: usize) -> ArrayD<f32> 
     mean
 }
 
-/// Compute the median of an array across an arbitrary axis.
-fn median_axis<D>(arr: &ArrayView<f32, D>, axis: Axis) -> Array<f32, D::Smaller>
+/// Compute the median of a slice.
+fn median<T>(x: &[T]) -> f64
 where
-    D: Dimension + RemoveAxis,
+    T: AsPrimitive<f64>,
 {
-    arr.map_axis(axis, |lane| {
-        let mut v: Vec<f32> = lane.iter().copied().collect();
-        #[allow(
-            clippy::integer_division,
-            reason = "integer truncation is the desired behaviour"
-        )]
-        // Ensures there are at least 2 elements - if not, return early
-        let mid: usize = v.len() / 2;
-        if mid == 0 {
-            return 0_f32;
-        }
+    // need to copy because partial sort modifies in-place
+    let mut v: Vec<f64> = x.iter().map(|k| k.as_()).collect();
 
-        v.select_nth_unstable_by(mid, f32::total_cmp);
-        let upper = *v.get(mid).unwrap_or(&0_f32);
+    // handle special cases
+    let len: usize = v.len();
+    if len == 0 {
+        return 0.0_f64;
+    }
+    if len == 1 {
+        return *v.first().unwrap_or(&0.0_f64);
+    }
 
-        if v.len().is_multiple_of(2) {
-            v.select_nth_unstable_by(mid - 1, f32::total_cmp);
-            f32::midpoint(*v.get(mid - 1).unwrap_or(&0_f32), upper)
-        } else {
-            upper
-        }
-    })
+    // Ensures there are at least 2 elements - if not, return early
+    let mid: usize = len >> 1; // integer truncation intended
+
+    v.select_nth_unstable_by(mid, f64::total_cmp);
+    let upper = *v.get(mid).unwrap_or(&0.0_f64);
+
+    if v.len().is_multiple_of(2) {
+        v.select_nth_unstable_by(mid - 1, f64::total_cmp);
+        f64::midpoint(*v.get(mid - 1).unwrap_or(&0.0_f64), upper)
+    } else {
+        upper
+    }
 }
 
 /// Implementation of an exponentially-weighted moving
@@ -190,7 +244,7 @@ mod tests {
         assert_abs_diff_eq!(mean_val, expected_mean_axis, epsilon = 1e-8);
     }
 
-    /// Test that ``median_axis`` produces expectation for odd-length array.
+    /// Test that ``median`` produces expectation for odd-length array.
     #[test]
     fn test_median_axis_odd() {
         // Test the odd-length case first
@@ -198,16 +252,13 @@ mod tests {
             clippy::cast_precision_loss,
             reason = "values too small for precision loss"
         )]
-        // Use multiple rows to ensure that axis mapping is correct
-        let data = ArrayD::from_shape_fn(ndarray::IxDyn(&[3, 13, 11]), |idx| idx[2] as f32);
-        let medval = median_axis(&data.view(), Axis(2));
+        let data = Array1::from_shape_fn(ndarray::Dim(11), |idx| idx as f64);
+        let medval = median(data.as_slice().unwrap());
 
-        let expected = ArrayD::<f32>::from_elem(medval.raw_dim(), 5.0_f32);
-
-        assert_abs_diff_eq!(medval, expected, epsilon = 1e-8);
+        assert_abs_diff_eq!(medval, 5.0_f64, epsilon = 1e-8);
     }
 
-    /// Test that ``median_axis`` produces expectation for even-length array.
+    /// Test that ``median`` produces expectation for even-length array.
     #[test]
     fn test_median_axis_even() {
         // Test the odd-length case first
@@ -215,12 +266,9 @@ mod tests {
             clippy::cast_precision_loss,
             reason = "values too small for precision loss"
         )]
-        // Use multiple rows to ensure that axis mapping is correct
-        let data = ArrayD::from_shape_fn(ndarray::IxDyn(&[3, 13, 10]), |idx| idx[2] as f32);
-        let medval = median_axis(&data.view(), Axis(2));
+        let data = Array1::from_shape_fn(ndarray::Dim(10), |idx| idx as f64);
+        let medval = median(data.as_slice().unwrap());
 
-        let expected = ArrayD::<f32>::from_elem(medval.raw_dim(), 4.5_f32);
-
-        assert_abs_diff_eq!(medval, expected, epsilon = 1e-8);
+        assert_abs_diff_eq!(medval, 4.5_f64, epsilon = 1e-8);
     }
 }

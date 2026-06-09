@@ -3,10 +3,12 @@
 //! # Endpoints
 //! - ``metadata``: Most recent packet header metadata
 //! - ``metrics``: Application prometheus metrics
+//! - ``human-metrics``: Some human-readable metrics
 //! - ``bad_input_likelihood``: per-input likelihood of a feed being corrupted
 //!
 //! # Debug endpoints
-//! - ``data``: Pretty print of most recent buffer frame
+//! - ``last-frame``: Pretty print of most recent buffer frame
+//! - ``write-buffers``: POST with directory to write SK buffers
 
 use std::io::ErrorKind::WouldBlock;
 use std::net::SocketAddr;

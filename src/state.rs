@@ -19,7 +19,7 @@ use crate::ringbuffer::RingBuffer;
 use crate::stats;
 
 /// Bad input likelihood loookback num samples
-const BAD_INPUT_LIKELIHOOD_LOOKBACK: u16 = 64;
+const BAD_INPUT_LIKELIHOOD_LOOKBACK: u16 = 128;
 
 /// Store for computed quantities.
 ///

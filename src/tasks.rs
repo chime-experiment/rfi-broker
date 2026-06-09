@@ -1,6 +1,7 @@
 //! Tasks implementing repeating async events.
 //!
 //! # Tasks
+//! - ``bad_input_task``: updates the `bad_input_likelihood` metric on every new frame
 //! - ``solar_event_task``: temporarily disables kotekan RFI flagging around solar transit
 
 use std::sync::Arc;

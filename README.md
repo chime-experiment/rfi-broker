@@ -1,9 +1,9 @@
 <h1 align="center">CHIME rfi receiver</h1>
 
 Deals with a few tasks related to RFI flagging:
-- Provides a per-feed likelihood that the feed is corrupted using spectral kurtosis data
+- Provides a per-feed likelihood that the feed is corrupted based on spectral kurtosis data
 - Enables and disables RFI zeroing around solar noon
-- Exports some useful Prometheus metrics (TBD)
+- Exports some useful Prometheus metrics
 
 This is intended to run on an auxiliary node. It is tightly coupled to the data being sent from
 kotekan - namely, the packet structure defined in
@@ -12,12 +12,12 @@ kotekan - namely, the packet structure defined in
 # Installation
 Install using [cargo](https://github.com/rust-lang/cargo).
 ```
-$ cargo install --git https://github.com/ljgray/rfi-receiver.git [--branch main] [--tag v1.0.0]
+$ cargo install --git https://github.com/chime-experiment/rfi-receiver.git [--branch main] [--tag v1.0.0]
 ```
-Installing to a system path (which is probably what you want) is also easy. Just note that
+Installing to a system path (which is probably what you want) is also straightforward. Note that
 cargo automatically appends `bin/` to the `--root` path.
 ```
-$ [sudo] cargo install --git https://github.com/ljgray/rfi-receiver.git [<version args>] --root /usr/local [--locked]
+$ [sudo] cargo install --git https://github.com/chime-experiment/rfi-receiver.git [<version args>] --root /usr/local [--locked]
 ```
 `cargo install` builds in `--release` mode by default. You can choose to use dependency versions
 specified in `Cargo.lock` by including the `--locked` argument.
@@ -40,7 +40,7 @@ The following profiles are included:
 $ [RUST_LOG=<log_level>] ./path/to/binary --addr <http address> --udp_addr <udp recv address> [--config <path to config>] [--threads <num threads>]
 ```
 
-If bulding from source, you can also just use `cargo run -- [args]`.
+If building from source, you can also just use `cargo run -- [args]`.
 
 ## Logging
 Log level is controlled by the `RUST_LOG` environment variable, and defaults to `INFO`. However, `DEBUG` statements (and below)
@@ -72,7 +72,7 @@ if using [nextest](https://nexte.st/). Integration testing is a WIP.
 # Metrics
 ## Bad Input Likelihood
 Represents the likelihood that an input is "bad", based on per-input spectral kurtosis integrated at
-some slowish cadence (<1 second). Represented as a percentage (0 - 100) using the base endpoint (`/`) and a
+a slowish cadence (<1 second). Represented as a percentage (0 - 100) using the base endpoint (`/`) and a
 0 - 1 scale when calling the `/bad_input_likelihood` endpoint.
 
 ### How is it computed?
@@ -85,3 +85,13 @@ is produced from the CDF of the resulting Fisher test statistic with chi-squared
 
 Per-sample likelihood is fed into an exponentially-weighted moving average with a 32-sample lookback period
 in order to smooth over short-duration broad-spectrum contamination.
+
+## Prometheus
+The following metrics are exported to [Prometheus](https://prometheus.io/) via the `/metrics` endpoint:
+- `rfireceiver_bad_input_likelihood`: input likelihood defined above. Labels: `[feed_index]`
+- `rfireceiver_frac_flagged`: fraction of flagged samples per frequency. Labels: `[freq_id]`
+- `rfireceiver_sktilde_avg`: feed-averaged spectral kurtosis accumulated over the integration period. Labels: `[freq_id]`
+- `rfireceiver_rfi_zeroing_first_stage_enabled`: whether or not first-stage zeroing should currently be set
+- `rfireceiver_rfi_zeroing_second_stage_enabled`: whether or not second-stage zeroing should currently be set
+- `rfireceiver_packets_received_total`: count of packets received from `kotekan`. Does *not* include OS-level losses
+- `rfireceiver_packets_dropped_total`: count of packets dropped within the receiver. does *not* include OS-level losses

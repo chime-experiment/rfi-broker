@@ -1,5 +1,5 @@
 ---
-name: rfi-receiver-ci-tests
+name: rfi-broker-ci-tests
 on:
   pull_request:
     branches:

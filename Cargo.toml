@@ -1,5 +1,5 @@
 [package]
-name = "rfi-receiver"
+name = "rfi-broker"
 version = "1.0.0"
 edition = "2024"
 

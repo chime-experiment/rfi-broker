@@ -1,5 +1,5 @@
 ---
-name: rfi-receiver-deploy-docs
+name: rfi-broker-deploy-docs
 on:
   pull_request:
     branches:
@@ -32,7 +32,7 @@ jobs:
         run: cargo doc --no-deps --document-private-items
       - name: Add redirect index.html
         run: |
-          echo "<meta http-equiv=\"refresh\" content=\"0; url=rfi_receiver/index.html\">" > target/doc/index.html
+          echo "<meta http-equiv=\"refresh\" content=\"0; url=rfi_broker/index.html\">" > target/doc/index.html
           touch target/doc/.nojekyll
       - name: Fix permissions
         run: chmod -c -R +rX "target/doc/"

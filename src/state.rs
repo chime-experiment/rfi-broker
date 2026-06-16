@@ -64,37 +64,37 @@ impl Default for Metrics {
 
         // populate registry
         registry.register(
-            "rfireceiver_packets_received_total",
+            "rfibroker_packets_received_total",
             "Total packets received",
             packet_loss.total.clone(),
         );
         registry.register(
-            "rfireceiver_packets_dropped_total",
+            "rfibroker_packets_dropped_total",
             "Total packets dropped",
             packet_loss.lost.clone(),
         );
         registry.register(
-            "rfireceiver_rfi_zeroing_first_stage_enabled",
-            "Whether or not the receiver thinks the first stage excision is enabled",
+            "rfibroker_rfi_zeroing_first_stage_enabled",
+            "Whether or not the broker thinks the first stage excision is enabled",
             rfi_zeroing.first_stage.clone(),
         );
         registry.register(
-            "rfireceiver_rfi_zeroing_second_stage_enabled",
-            "Whether or not the receiver thinks the second stage excision is enabled",
+            "rfibroker_rfi_zeroing_second_stage_enabled",
+            "Whether or not the broker thinks the second stage excision is enabled",
             rfi_zeroing.second_stage.clone(),
         );
         registry.register(
-            "rfireceiver_bad_input_likelihood",
+            "rfibroker_bad_input_likelihood",
             "Per-element likelihood that a given feed is bad",
             bad_input_likelihood.values.clone(),
         );
         registry.register(
-            "rfireceiver_frac_flagged",
+            "rfibroker_frac_flagged",
             "Fraction of flagged samples per frame for each frequency",
             frac_flagged.values.clone(),
         );
         registry.register(
-            "rfireceiver_sktilde_avg",
+            "rfibroker_sktilde_avg",
             "Average SK per frame for each frequency",
             sktilde_avg.values.clone(),
         );

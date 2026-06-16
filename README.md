@@ -1,4 +1,4 @@
-<h1 align="center">CHIME rfi receiver</h1>
+<h1 align="center">CHIME rfi broker</h1>
 
 Deals with a few tasks related to RFI flagging:
 - Provides a per-feed likelihood that the feed is corrupted based on spectral kurtosis data
@@ -12,19 +12,19 @@ kotekan - namely, the packet structure defined in
 # Installation
 Install using [cargo](https://github.com/rust-lang/cargo).
 ```
-$ cargo install --git https://github.com/chime-experiment/rfi-receiver.git [--branch main] [--tag v1.0.0]
+$ cargo install --git https://github.com/chime-experiment/rfi-broker.git [--branch main] [--tag v1.0.0]
 ```
 Installing to a system path (which is probably what you want) is also straightforward. Note that
 cargo automatically appends `bin/` to the `--root` path.
 ```
-$ [sudo] cargo install --git https://github.com/chime-experiment/rfi-receiver.git [<version args>] --root /usr/local [--locked]
+$ [sudo] cargo install --git https://github.com/chime-experiment/rfi-broker.git [<version args>] --root /usr/local [--locked]
 ```
 `cargo install` builds in `--release` mode by default. You can choose to use dependency versions
 specified in `Cargo.lock` by including the `--locked` argument.
 
 ## Build from source
 ```
-$ git clone https://github.com/ljgray/rfi-receiver.git
+$ git clone https://github.com/ljgray/rfi-broker.git
 $ cargo build [--release] [--profile <profile>]
 $ cargo run [--release] [--profile <profile>]
 ```
@@ -88,10 +88,10 @@ in order to smooth over short-duration broad-spectrum contamination.
 
 ## Prometheus
 The following metrics are exported to [Prometheus](https://prometheus.io/) via the `/metrics` endpoint:
-- `rfireceiver_bad_input_likelihood`: input likelihood defined above. Labels: `[feed_index]`
-- `rfireceiver_frac_flagged`: fraction of flagged samples per frequency. Labels: `[freq_id]`
-- `rfireceiver_sktilde_avg`: feed-averaged spectral kurtosis accumulated over the integration period. Labels: `[freq_id]`
-- `rfireceiver_rfi_zeroing_first_stage_enabled`: whether or not first-stage zeroing should currently be set
-- `rfireceiver_rfi_zeroing_second_stage_enabled`: whether or not second-stage zeroing should currently be set
-- `rfireceiver_packets_received_total`: count of packets received from `kotekan`. Does *not* include OS-level losses
-- `rfireceiver_packets_dropped_total`: count of packets dropped within the receiver. does *not* include OS-level losses
+- `rfibroker_bad_input_likelihood`: input likelihood defined above. Labels: `[feed_index]`
+- `rfibroker_frac_flagged`: fraction of flagged samples per frequency. Labels: `[freq_id]`
+- `rfibroker_sktilde_avg`: feed-averaged spectral kurtosis accumulated over the integration period. Labels: `[freq_id]`
+- `rfibroker_rfi_zeroing_first_stage_enabled`: whether or not first-stage zeroing should currently be set
+- `rfibroker_rfi_zeroing_second_stage_enabled`: whether or not second-stage zeroing should currently be set
+- `rfibroker_packets_received_total`: count of packets received from `kotekan`. Does *not* include OS-level losses
+- `rfibroker_packets_dropped_total`: count of packets dropped within the broker. does *not* include OS-level losses

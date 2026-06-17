@@ -46,6 +46,13 @@ If building from source, you can also just use `cargo run -- [args]`.
 Log level is controlled by the `RUST_LOG` environment variable, and defaults to `INFO`. However, `DEBUG` statements (and below)
 are entirely remove in a `release` build.
 
+### systemd
+Log formatting differs depending on whether or not the program is controlled by systemd. On older systems (Ubuntu <= 16.04),
+the environment checks are not present, so systemd formatting can be explicitly set using
+```
+$ export RFI_BROKER_JOURNALD_TRACING=1
+```
+
 ## Endpoints
 The following endpoints are exposed in all build profiles:
 - `/metadata`: most recent packet header

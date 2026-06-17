@@ -108,10 +108,10 @@ async fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Error> {
     let actual = sock_ref.recv_buffer_size()? as f64 / 1024_f64 / 1024_f64;
 
     tracing::info!(
-        addr = ?addr,
+        udp_addr = ?addr,
         requested_MB = ?UDP_BUF_SIZE_MB,
         actual_MB = ?actual,
-        "created UDP socket:",
+        "created UDP socket",
     );
 
     Ok(socket)
@@ -265,7 +265,7 @@ pub async fn run(
     let http_listener = TcpListener::bind(http_addr).await?;
 
     let http = tokio::spawn(axum::serve(http_listener, make_router(state)).into_future());
-    tracing::info!(addr = ?http_addr, "started HTTP server:");
+    tracing::info!(http_addr = ?http_addr, "started HTTP server");
 
     tokio::select! {
         result = packet_handler => result?.wrap_err("packet handler failed"),

@@ -1,0 +1,95 @@
+---
+name: rfi-broker-auto-release
+on:
+  push:
+    branches:
+      - main
+
+permissions: {}
+
+jobs:
+  auto-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Read version from Cargo.toml
+        id: cargo_version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(awk -F'"' '/^version[[:space:]]*=[[:space:]]*"/ { print $2; exit }' Cargo.toml)
+          if [ -z "${version:-}" ]; then
+            echo "Could not read version from Cargo.toml" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Create release if version increased
+        uses: actions/github-script@v9
+        env:
+          CARGO_VERSION: ${{ steps.cargo_version.outputs.version }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const version = process.env.CARGO_VERSION;
+            const tag = `v${version}`;
+
+            function cmp(a, b) {
+              const pa = a.split('.').map(Number);
+              const pb = b.split('.').map(Number);
+              const len = Math.max(pa.length, pb.length);
+              for (let i = 0; i < len; i++) {
+                const da = pa[i] || 0;
+                const db = pb[i] || 0;
+                if (da > db) return 1;
+                if (da < db) return -1;
+              }
+              return 0;
+            }
+
+            let latestTag = null;
+            try {
+              const latest = await github.rest.repos.getLatestRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+              });
+              latestTag = latest.data.tag_name || null;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+
+            if (latestTag) {
+              const latestVersion = latestTag.replace(/^v/, '');
+              if (cmp(version, latestVersion) <= 0) {
+                core.info(`Cargo version ${version} is not greater than latest release ${latestVersion}; skipping.`);
+                return;
+              }
+            }
+
+            try {
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `refs/tags/${tag}`,
+                sha: context.sha,
+              });
+            } catch (error) {
+              if (error.status === 422) {
+                core.setFailed(`Tag ${tag} already exists; refusing to modify existing tag.`);
+                return;
+              }
+              throw error;
+            }
+
+            await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: version,
+              generate_release_notes: true,
+            });

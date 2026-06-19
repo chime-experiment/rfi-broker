@@ -7,7 +7,7 @@ Deals with a few tasks related to RFI flagging:
 
 This is intended to run on an auxiliary node. It is tightly coupled to the data being sent from
 kotekan - namely, the packet structure defined in
-[kotekan](https://github.com/kotekan/kotekan/blob/chord/lib/utils/rfi_functions.h#L14)
+[kotekan](https://github.com/kotekan/kotekan/blob/chord/lib/utils/rfi_functions.hpp#L13)
 
 # Installation
 Install using [cargo](https://github.com/rust-lang/cargo).

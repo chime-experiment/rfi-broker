@@ -3,23 +3,17 @@
 //! The shape and dimensions are fixed at construction time; frames with
 //! a mismatched shape are dropped on push.
 
-use parking_lot::{Mutex, RwLock};
-use std::collections::{BTreeMap, VecDeque};
-use std::sync::Arc;
+use parking_lot::Mutex;
+use std::collections::BTreeMap;
+use std::sync::{Arc, OnceLock};
 
 use tokio::sync::broadcast;
 
 use eyre::{OptionExt, WrapErr, bail, eyre};
 
-use ndarray::{ArrayD, ArrayViewD, Axis, IxDyn};
+use ndarray::{Array2, ArrayD, ArrayViewD, Axis, IxDyn};
 use num_traits::Num;
 
-#[cfg(any(debug_assertions, test))]
-use ndarray::Array2;
-
-/// Maximum number of array frames retained in the ring buffer
-const RING_CAPACITY: usize = 32;
-const RING_TX_CAPACITY: usize = 32;
 /// Constants managing how/when a partial frame should stop accumulating
 /// samples and get moved into the buffer
 const PARTIAL_FRAME_CAPACITY: usize = 8;
@@ -126,32 +120,42 @@ pub type SharedFrame<T> = Arc<Frame<T>>;
 ///
 /// The inner [`RwLock`] is held only for push/snapshot operations.
 #[derive(Debug)]
-pub struct RingBuffer<T> {
+pub struct Buffer<T, const N: usize> {
     /// Expected shape of each frame
     frame_shape: Vec<usize>,
-    /// Store a handful of partial frames
+    /// Store a partial frames
     partial_frames: Mutex<BTreeMap<u64, Frame<T>>>,
-    /// Ring buffer of the most recently received array frames
-    // NB: this currently isn't used for anything other than
-    // debugging, since tasks handler new frames with `subscribe`
-    frames: RwLock<VecDeque<SharedFrame<T>>>,
-    /// List of channels subscribed to new frame events
+    /// Holds the most recent frame for quick access
+    last_frame: OnceLock<SharedFrame<T>>,
+    /// broadcast sender for new frame events
     tx: broadcast::Sender<SharedFrame<T>>,
 }
 
-impl<T> RingBuffer<T>
+impl<T, const N: usize> Buffer<T, N>
 where
     T: Num + Clone,
 {
     /// Create a new ringbuffer with a fixed shape.
     pub fn new(frame_shape: Vec<usize>) -> Self {
-        let (tx, _) = broadcast::channel(RING_TX_CAPACITY);
+        let (tx, _) = broadcast::channel(N);
         Self {
             frame_shape,
             partial_frames: Mutex::new(BTreeMap::<u64, Frame<T>>::new()),
-            frames: RwLock::new(VecDeque::<SharedFrame<T>>::with_capacity(RING_CAPACITY)),
+            last_frame: OnceLock::<SharedFrame<T>>::default(),
             tx,
         }
+    }
+
+    /// Return the shape of each frame
+    pub const fn shape(&self) -> &Vec<usize> {
+        &self.frame_shape
+    }
+
+    /// Get the most recently pushed frame.
+    ///
+    /// `Arc` is cloned internally
+    pub fn last_frame(&self) -> Option<SharedFrame<T>> {
+        self.last_frame.get().map(Arc::clone)
     }
 
     /// Subscribe to a new frame event broadcast.
@@ -165,23 +169,14 @@ where
         self.tx.subscribe()
     }
 
-    /// Acquire the lock and push a frame to the buffer.
-    ///
-    /// Sends the pushed frame to all subscribers.
-    fn lock_push(&self, frame: Frame<T>) {
-        let frame = Arc::new(frame);
-        // push the frame to the buffer, only holding lock
-        // as long as needed
-        {
-            let mut guard = self.frames.write();
-            if guard.len() == RING_CAPACITY {
-                guard.pop_front(); // evict oldest
-            }
-            guard.push_back(Arc::clone(&frame));
-        }
-        // send the frame to all subscribers. `clone` is automatically
-        // called by all receivers
-        let _ = self.tx.send(frame);
+    /// Sends a frame to all subscribers and update the
+    /// internal `last_frame`.
+    fn push(&self, frame: Frame<T>) {
+        let shared_frame = Arc::new(frame);
+        // record that this is the most recent frame
+        let _ = self.last_frame.set(Arc::clone(&shared_frame));
+        // send to all subscibers
+        let _ = self.tx.send(shared_frame);
     }
 
     /// Push all partial frames into the buffer.
@@ -192,20 +187,8 @@ where
         let num_frames = guard.len();
 
         while let Some((_, frame)) = guard.pop_first() {
-            self.lock_push(frame);
+            self.push(frame);
         }
-
-        num_frames
-    }
-
-    /// Clear all frames from the buffer.
-    pub fn clear(&self) -> usize {
-        // First flush everything that's pending
-        let mut num_frames = self.flush();
-        // Now remove everything from the buffer
-        let mut guard = self.frames.write();
-        num_frames += guard.len();
-        guard.clear();
 
         num_frames
     }
@@ -253,7 +236,7 @@ where
                     .ok_or_eyre("unexpected failure extracting partial frame")?;
                 // Only push frames with a minimum sample count
                 if frame.sample_count >= MIN_FRAME_SAMPLE_COUNT {
-                    self.lock_push(frame);
+                    self.push(frame);
                 } else {
                     tracing::debug!(
                         "Dropped frame with sequence number {} because sample count {} is below \
@@ -280,7 +263,7 @@ where
                 eyre!("unexpected failure getting key {key}, which is expected to exist")
             })?;
 
-            self.lock_push(filled_frame);
+            self.push(filled_frame);
         }
 
         Ok(key)
@@ -312,85 +295,66 @@ where
         self.push_array(&arr, id, indices, axis)
     }
 
-    /// Return a copy of the most recent frame
-    pub fn last_frame(&self) -> Option<SharedFrame<T>> {
-        self.frames.read().back().cloned()
+    /// Accumulate `N` frames and return as a Vec.
+    pub async fn accumulate(&self, n: usize) -> eyre::Result<Vec<SharedFrame<T>>> {
+        // subscribe to the internal sender
+        let mut rx = self.tx.subscribe();
+        let mut buf = Vec::with_capacity(n);
+
+        while buf.len() < n {
+            match rx.recv().await {
+                Ok(frame) => buf.push(frame),
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    bail!("receive buffer overflowed - {skipped} frames were missed");
+                }
+                Err(broadcast::error::RecvError::Closed) => {
+                    bail!("sender was dropped before accumulation was complete");
+                }
+            }
+        }
+        // shrink capacity in case loop returned early
+        buf.shrink_to_fit();
+
+        Ok(buf)
     }
 }
 
-/// Implements methods that are only used for debugging. This includes
-/// buffer metadata and options to copy a single frame or the entire
-/// buffer for inspection.
-#[cfg(any(debug_assertions, test))]
-impl<T> RingBuffer<T>
+/// Return an `N+1` dimensional [`ArrayD`] stacked over an axis, or `None`
+/// if no frames available.
+///
+/// Returns `None` if any errors occur while stacking.
+pub fn stack_buffer_array<T>(
+    buffer: &[SharedFrame<T>],
+    axis: impl Into<Option<usize>>,
+) -> Option<ArrayD<T>>
 where
-    T: Clone + Num,
+    T: Num + Clone,
 {
-    /// Get the length, or number of frames in the buffer.
-    pub fn len(&self) -> usize {
-        self.frames.read().len()
-    }
+    // `stack` requires views
+    let views: Vec<ArrayViewD<T>> = buffer.iter().map(|f| f.array.view()).collect();
 
-    /// Get the number of frames in the buffer queue.
-    pub fn queue_len(&self) -> usize {
-        self.partial_frames.lock().len()
-    }
+    let ax = axis.into().map_or(Axis(0), Axis);
 
-    /// Get the buffer frame shape
-    pub const fn shape(&self) -> &Vec<usize> {
-        &self.frame_shape
-    }
+    ndarray::stack(ax, &views).ok()
+}
 
-    /// Returns a cloned snapshot of all frames currently in the buffer.
-    ///
-    /// This actually just clones the ``Arc`` which wraps the frame,
-    /// so overhead is extremely minimal.
-    ///
-    /// The lock is released before returning.
-    fn snapshot(&self) -> Vec<SharedFrame<T>> {
-        let guard = self.frames.read();
-        // produces at-most 2 contiguous slices, so faster to copy
-        let (a, b) = guard.as_slices();
-        let mut snapshot = Vec::with_capacity(RING_CAPACITY);
-        // insert the slices
-        snapshot.extend_from_slice(a);
-        snapshot.extend_from_slice(b);
+/// Stack the frame masks, creating a new outermost axis.
+pub fn stack_buffer_mask<T>(buffer: &[SharedFrame<T>]) -> Option<Array2<u8>>
+where
+    T: Num + Clone,
+{
+    // Sort out the shape
+    let ncols = buffer.first()?.mask.len();
+    let nrows = buffer.len();
+    // Masks are 1-dimensional, so concatenate the first axis. This means
+    // that the sample axis is the slowest varying, so have to transpose
+    // if this isn't the desired layout
+    let flat_vec: Vec<u8> = buffer
+        .iter()
+        .flat_map(|f| f.mask.iter().map(|&x| u8::from(x))) // return u8 instead of bool
+        .collect();
 
-        snapshot
-    }
-
-    /// Return an `N+1` dimensional [`ArrayD`] stacked over an axis, or `None`
-    /// if no frames available.
-    ///
-    /// Returns `None` if any errors occur while stacking.
-    pub fn stack_array(&self, axis: impl Into<Option<usize>>) -> Option<ArrayD<T>> {
-        // Grab a snapshot of the current buffer and relase lock
-        let snapshot: Vec<SharedFrame<T>> = self.snapshot();
-        // `stack` requires views
-        let views: Vec<ArrayViewD<T>> = snapshot.iter().map(|f| f.array.view()).collect();
-
-        let ax = axis.into().map_or(Axis(self.frame_shape.len()), Axis);
-
-        ndarray::stack(ax, &views).ok()
-    }
-
-    /// Stack the frame masks, creating a new outermost axis.
-    pub fn stack_mask(&self) -> Option<Array2<u8>> {
-        // Get a snapshot of the current buffer and release lock
-        let snapshot: Vec<SharedFrame<T>> = self.snapshot();
-        // Sort out the shape
-        let ncols = self.last_frame()?.mask.len();
-        let nrows = snapshot.len();
-        // Masks are 1-dimensional, so concatenate the first axis. This means
-        // that the sample axis is the slowest varying, so have to transpose
-        // if this isn't the desired layout
-        let flat_vec: Vec<u8> = snapshot
-            .iter()
-            .flat_map(|f| f.mask.iter().map(|&x| u8::from(x))) // return u8 instead of bool
-            .collect();
-
-        ndarray::Array2::<u8>::from_shape_vec((nrows, ncols), flat_vec).ok()
-    }
+    ndarray::Array2::<u8>::from_shape_vec((nrows, ncols), flat_vec).ok()
 }
 
 #[cfg(test)]
@@ -404,44 +368,13 @@ mod tests {
         clippy::cast_precision_loss,
         reason = "casts on small positive integers"
     )]
-    #[test]
-    /// Test that partial frames are handled correctly.
-    fn test_push_vec() -> Result<(), Box<dyn std::error::Error>> {
-        let frame_shape = vec![3, 12];
-        // Create a new empty buffer
-        let buf = RingBuffer::<f32>::new(frame_shape);
-        // Expected array which will be pushed to the buffer in chunks
-        let expected_arr = ArrayD::<f32>::from_shape_fn(IxDyn(&[3, 12]), |idx| idx[0] as f32);
-
-        for (i, row_view) in expected_arr.axis_iter(Axis(0)).enumerate() {
-            // There shouldn't be anything in the buffer yet
-            assert_eq!(buf.len(), 0);
-            let chunk: Vec<f32> = row_view.iter().copied().collect();
-            buf.push_vec(chunk, 0_u64, &[i], 0)?;
-        }
-        // After the last push, there should now be a frame
-        // in the buffer
-        assert_eq!(buf.len(), 1);
-
-        // Make sure that the input values are as-expected
-        let frame = &buf.last_frame().unwrap().array;
-        assert_eq!(frame, expected_arr);
-
-        Ok(())
-    }
-
-    #[allow(
-        clippy::cast_sign_loss,
-        clippy::cast_precision_loss,
-        reason = "casts on small positive integers"
-    )]
     #[tokio::test]
     /// Test that subscribers received a frame as expected, and that both the
     /// pushed and sent frames match
     async fn test_subscribe() -> Result<(), Box<dyn std::error::Error>> {
         let frame_shape = vec![3, 12];
         // Create a new empty buffer
-        let buf = RingBuffer::<f32>::new(frame_shape);
+        let buf = Buffer::<f32, 4>::new(frame_shape);
         // Subscribe to the buffer for new frame events
         let mut rx1 = buf.subscribe();
         let mut rx2 = buf.subscribe();
@@ -449,15 +382,11 @@ mod tests {
         // Expected array which will be pushed to the buffer in chunks
         let expected_arr = ArrayD::<f32>::from_shape_fn(IxDyn(&[3, 12]), |idx| idx[0] as f32);
 
+        // Push the array to the buffer in chunks
         for (i, row_view) in expected_arr.axis_iter(Axis(0)).enumerate() {
-            // There shouldn't be anything in the buffer yet
-            assert_eq!(buf.len(), 0);
             let chunk: Vec<f32> = row_view.iter().copied().collect();
             buf.push_vec(chunk, 0_u64, &[i], 0)?;
         }
-        // After the last push, there should now be a frame
-        // in the buffer
-        assert_eq!(buf.len(), 1);
 
         // Confirm that the subscriber has received the new frame
         let frame1: SharedFrame<f32> = rx1.recv().await?;
@@ -475,44 +404,65 @@ mod tests {
         clippy::cast_precision_loss,
         reason = "casts on small positive integers"
     )]
-    #[test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     /// Test that the mask and arrays are stacked properly
-    fn test_stack_frames() -> Result<(), Box<dyn std::error::Error>> {
+    async fn test_accumulate() -> Result<(), Box<dyn std::error::Error>> {
         let frame_shape = vec![3, 12];
-        //i Create a new buffer
-        let buf = RingBuffer::<f32>::new(frame_shape);
+        //i Create a new buffer. Wrap in an Arc so we can pass to the receive task
+        let buf = Arc::new(Buffer::<f32, 4>::new(frame_shape));
         // create an array to push
         let arr = ArrayD::<f32>::from_shape_fn(IxDyn(&[2, 12]), |idx| idx[1] as f32);
         // create an array to compare with, since there's an extra row
         let mut arr_compare = ArrayD::<f32>::zeros(IxDyn(&[3, 12]));
         arr_compare.slice_mut(s![..2, ..]).assign(&arr);
 
+        // spawn the `accumulate` call, and wait until the task has actually spawned
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let buf_clone = Arc::clone(&buf);
+        let handle = tokio::spawn(async move {
+            tx.send(()).unwrap();
+            buf_clone.accumulate(2).await
+        });
+
+        // wait for spawned task
+        rx.await?;
+
         // Push the partial arrays to the buffer
         for i in 0..2 {
             buf.push_array(&arr.clone(), i as u64, &[0, 1], 0)?;
         }
-        // flush frames to the buffer
+        // flush frames to the buffer to ensure that everything has been sent
         buf.flush();
 
-        // Confirm that two frames have been pushed
-        assert_eq!(buf.len(), 2);
+        // grab the received vec
+        let received = handle.await??;
+
+        // assert that the last frame was flushed
+        assert!(!received.is_empty(), "frame was never received");
+        assert_eq!(received.first().unwrap(), &buf.last_frame().unwrap());
 
         // Stack both buffers over the 0th axis
-        let arr_stack = buf.stack_array(0).unwrap();
-        let mask_stack = buf.stack_mask().unwrap();
+        let arr_stack = stack_buffer_array(&received, 0).unwrap();
+        let mask_stack = stack_buffer_mask(&received).unwrap();
 
         assert_eq!(arr_stack.shape(), &[2, 3, 12]);
         assert_eq!(mask_stack.shape(), &[2, 3]);
 
         // Check that each row of the stacked arrays are as expected
-        for i in 0..buf.len() {
+        for i in 0..received.len() {
             assert_eq!(arr_stack.index_axis(Axis(0), i), arr_compare);
             assert_eq!(mask_stack.row(i).to_vec(), vec![1u8, 1u8, 0u8]);
         }
 
         // Finally, confirm that stacking over different axes also works as expected
-        assert_eq!(buf.stack_array(1).unwrap().shape(), &[3, 2, 12]);
-        assert_eq!(buf.stack_array(2).unwrap().shape(), &[3, 12, 2]);
+        assert_eq!(
+            stack_buffer_array(&received, 1).unwrap().shape(),
+            &[3, 2, 12]
+        );
+        assert_eq!(
+            stack_buffer_array(&received, 2).unwrap().shape(),
+            &[3, 12, 2]
+        );
 
         Ok(())
     }

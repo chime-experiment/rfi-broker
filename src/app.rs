@@ -16,12 +16,10 @@ use std::sync::Arc;
 
 use eyre::WrapErr;
 
-use axum::{Router, routing::get};
 #[cfg(debug_assertions)]
-use {
-    axum::middleware::{self, Next},
-    axum::routing::post,
-};
+use axum::middleware::{self, Next};
+use axum::routing::post;
+use axum::{Router, routing::get};
 
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::time::{Duration, Instant, sleep_until};
@@ -36,9 +34,6 @@ const UDP_BUF_SIZE_MB: usize = 8;
 /// Time in seconds between packets before all pending packets are
 /// flushed to the data state buffers
 const DATA_STATE_FLUSH_TIMEOUT_SECONDS: u64 = 5;
-/// Time in seconds before all data is cleared from the
-/// data state buffers
-const DATA_STATE_CLEAR_TIMEOUT_SECONDS: u64 = 60;
 
 /// Middleware to emit a debug message every time an endpoint is triggered.
 ///
@@ -75,11 +70,7 @@ fn make_router(state: AppState) -> Router {
             "/bad_input_likelihood",
             get(endpoints::get_bad_input_likelihood),
         )
-        .route("/", get(endpoints::dump_bad_input_likelihood));
-
-    // debug-only endpoints
-    #[cfg(debug_assertions)]
-    let router = router
+        .route("/", get(endpoints::dump_bad_input_likelihood))
         .route("/last-frame", get(endpoints::last_frame))
         .route("/write-buffers", post(endpoints::write_buffers));
 
@@ -132,12 +123,9 @@ async fn packet_handler_task(
 
     // Record how long it's been since the last packet was received
     let flush_timeout = Duration::from_secs(DATA_STATE_FLUSH_TIMEOUT_SECONDS);
-    let clear_timeout = Duration::from_secs(DATA_STATE_CLEAR_TIMEOUT_SECONDS);
     let flush_timer = sleep_until(Instant::now() + flush_timeout);
-    let clear_timer = sleep_until(Instant::now() + clear_timeout);
 
     tokio::pin!(flush_timer);
-    tokio::pin!(clear_timer);
 
     loop {
         tokio::select! {
@@ -172,7 +160,6 @@ async fn packet_handler_task(
 
                     // Got a packet - reset the `flush` timer
                     flush_timer.as_mut().reset(Instant::now() + flush_timeout);
-                    clear_timer.as_mut().reset(Instant::now() + clear_timeout);
 
                     // If there was an error in `try_recv_from`, go back and
                     // try to read another packet
@@ -205,19 +192,6 @@ async fn packet_handler_task(
                 }
                 // log the next time we start receiving packets
                 log_packet_recv =  true;
-            }
-
-            () = &mut clear_timer => {
-                // Remove all data from the state buffers
-                let nsamp = buffers.clear();
-
-                if nsamp > 0 {
-                    tracing::info!("No packets received for {DATA_STATE_CLEAR_TIMEOUT_SECONDS}s - \
-                        clearing {nsamp} samples from state buffers"
-                    );
-                }
-                // log the next time we stat receiving packets
-                log_packet_recv = true;
             }
         }
     }

@@ -12,11 +12,11 @@ use eyre::WrapErr;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod app;
+mod buffer;
 mod config;
 mod endpoints;
 mod metrics;
 mod packet;
-mod ringbuffer;
 mod state;
 mod stats;
 mod tasks;

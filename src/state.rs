@@ -13,13 +13,15 @@ use axum::extract::FromRef;
 
 use prometheus_client::registry::Registry;
 
+use crate::buffer::Buffer;
 use crate::metrics;
 use crate::packet::{Body, Header, Packet, packet_types};
-use crate::ringbuffer::RingBuffer;
 use crate::stats;
 
 /// Bad input likelihood lookback num samples
 const BAD_INPUT_LIKELIHOOD_LOOKBACK: u16 = 32;
+/// Maximum number of array frames retained in the ring buffer
+const TX_BUFFER_CAPACITY: usize = 32;
 
 /// Store for computed quantities.
 ///
@@ -134,9 +136,9 @@ pub struct Buffers {
     pub metadata: OnceLock<Mutex<Header>>,
     /// Ringbuffers holding associated datasets from the
     /// packet body. Implements `Default`.
-    pub frac_flagged: OnceLock<RingBuffer<packet_types::FracFlaggedType>>,
-    pub sktilde_avg: OnceLock<RingBuffer<packet_types::SkType>>,
-    pub skbar_avg: OnceLock<RingBuffer<packet_types::SkType>>,
+    pub frac_flagged: OnceLock<Buffer<packet_types::FracFlaggedType, TX_BUFFER_CAPACITY>>,
+    pub sktilde_avg: OnceLock<Buffer<packet_types::SkType, TX_BUFFER_CAPACITY>>,
+    pub skbar_avg: OnceLock<Buffer<packet_types::SkType, TX_BUFFER_CAPACITY>>,
 }
 
 impl Buffers {
@@ -159,7 +161,7 @@ impl Buffers {
         // Push to each ringbuffer, initializing if this is the first push
         self.frac_flagged
             .get_or_init(|| {
-                RingBuffer::<packet_types::FracFlaggedType>::new(vec![
+                Buffer::<packet_types::FracFlaggedType, TX_BUFFER_CAPACITY>::new(vec![
                     header.num_total_freq as usize,
                 ])
             })
@@ -167,13 +169,15 @@ impl Buffers {
 
         self.sktilde_avg
             .get_or_init(|| {
-                RingBuffer::<packet_types::SkType>::new(vec![header.num_total_freq as usize])
+                Buffer::<packet_types::SkType, TX_BUFFER_CAPACITY>::new(vec![
+                    header.num_total_freq as usize,
+                ])
             })
             .push_vec(body.sktilde_avg, id, &indices, axis)?;
 
         self.skbar_avg
             .get_or_init(|| {
-                RingBuffer::<packet_types::SkType>::new(vec![
+                Buffer::<packet_types::SkType, TX_BUFFER_CAPACITY>::new(vec![
                     header.num_total_freq as usize,
                     header.num_elements as usize,
                 ])
@@ -190,8 +194,7 @@ impl Buffers {
         Ok(id)
     }
 
-    /// Flush all buffers - that is, push all partial frames to
-    /// the buffer.
+    /// Flush all buffers - that is, push all partial frames.
     pub fn flush(&self) -> usize {
         let mut nflushed = 0;
 
@@ -206,24 +209,6 @@ impl Buffers {
         }
 
         nflushed
-    }
-
-    /// Clear all buffers - that is, remove all frames from
-    /// the buffer.
-    pub fn clear(&self) -> usize {
-        let mut ncleared = 0;
-
-        if let Some(buf) = self.frac_flagged.get() {
-            ncleared += buf.clear();
-        }
-        if let Some(buf) = self.sktilde_avg.get() {
-            ncleared += buf.clear();
-        }
-        if let Some(buf) = self.skbar_avg.get() {
-            ncleared += buf.clear();
-        }
-
-        ncleared
     }
 }
 
@@ -246,20 +231,18 @@ mod tests {
     use super::*;
     use crate::packet::tests::make_packets;
 
-    /// Test that packets are successfully parsed and pushed into
-    /// the corresponding [`RingBuffer`]s.
+    /// Test that are successfully initialized when the first packet
+    /// is pushed.
     #[test]
-    fn test_push_packets() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_init_buffers() -> Result<(), Box<dyn std::error::Error>> {
         let state = Buffers::default();
 
-        // Produce and push a couple of packets
         let packets = make_packets(4, 2)?;
         assert_eq!(packets.len(), 2);
 
         for packet in &packets {
             state.push(packet.clone())?;
         }
-
         // There should now be some data in the various buffers
         assert!(state.metadata.get().is_some());
         assert!(state.frac_flagged.get().is_some());
@@ -297,15 +280,46 @@ mod tests {
         assert_eq!(*sktilde_avg.shape(), [4]);
         assert_eq!(*skbar_avg.shape(), [4, 10]);
 
+        Ok(())
+    }
+
+    /// Test that packets are successfully parsed and pushed into
+    /// the corresponding [`Buffer`]s.
+    #[test]
+    fn test_push_packets() -> Result<(), Box<dyn std::error::Error>> {
+        let state = Arc::new(Buffers::default());
+
+        // Push some packets to the buffer to initialize
+        let packets = make_packets(4, 2)?;
+        for packet in &packets {
+            state.push(packet.clone())?;
+        }
+        state.flush();
+
+        // Check that each buffer has been initialized
+        let frac_flagged = state
+            .frac_flagged
+            .get()
+            .ok_or("error getting `frac_flagged`")?;
+        let sktilde_avg = state
+            .sktilde_avg
+            .get()
+            .ok_or("error getting `sktilde_avg`")?;
+        let skbar_avg = state.skbar_avg.get().ok_or("error getting `skbar_avg`")?;
+
         // Check that a complete frame has been pushed to each buffer
-        assert_eq!(frac_flagged.len(), 1);
-        assert_eq!(frac_flagged.queue_len(), 0);
-
-        assert_eq!(sktilde_avg.len(), 1);
-        assert_eq!(sktilde_avg.queue_len(), 0);
-
-        assert_eq!(skbar_avg.len(), 1);
-        assert_eq!(skbar_avg.queue_len(), 0);
+        assert!(
+            frac_flagged.last_frame().is_some(),
+            "`frac_flagged` frame was not pushed"
+        );
+        assert!(
+            sktilde_avg.last_frame().is_some(),
+            "`sktilde_avg` frame was not pushed"
+        );
+        assert!(
+            skbar_avg.last_frame().is_some(),
+            "`skbar_avg` frame was not pushed"
+        );
 
         Ok(())
     }

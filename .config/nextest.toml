@@ -2,4 +2,5 @@
 [profile.ci]
 # Don't cancel after the first failure
 fail-fast = false
+slow-timeout = { period = "10s", terminate-after = 3 }
 status-level = "all"

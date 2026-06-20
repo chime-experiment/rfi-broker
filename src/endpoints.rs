@@ -1,5 +1,4 @@
 //! Axum endpoints and associated functions.
-#[cfg(debug_assertions)]
 use {
     axum::extract::Query,
     ndarray::Axis,
@@ -9,9 +8,9 @@ use {
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use prometheus_client::encoding::text::encode;
 
-#[cfg(debug_assertions)]
 use {ndarray_npy::write_npy, serde::Deserialize};
 
+use crate::buffer::{stack_buffer_array, stack_buffer_mask};
 use crate::state::AppState;
 
 /// Return an error as an ``INTERNAL_SERVER_ERROR``.
@@ -161,15 +160,12 @@ pub async fn get_bad_input_likelihood(
 /// `GET /last-frame` — snapshot most recent frame in all dataset ring buffers.
 ///
 /// Only exists in debug builds
-#[cfg(debug_assertions)]
 pub async fn last_frame(State(state): State<AppState>) -> Result<String, (StatusCode, String)> {
     let mut out = String::new();
 
     // Dump all the current buffers
     if let Some(frac_flagged) = state.buffers.frac_flagged.get() {
         writeln!(out, "-- frac_flagged --").map_err(handler_err)?;
-        writeln!(out, "  frame_count : {:?}", frac_flagged.len()).map_err(handler_err)?;
-        writeln!(out, "  frames_in_queue : {:?}", frac_flagged.queue_len()).map_err(handler_err)?;
         writeln!(out, "  frame_shape : {:?}", frac_flagged.shape()).map_err(handler_err)?;
 
         if let Some(frame) = frac_flagged.last_frame() {
@@ -181,8 +177,6 @@ pub async fn last_frame(State(state): State<AppState>) -> Result<String, (Status
 
     if let Some(sktilde_avg) = state.buffers.sktilde_avg.get() {
         writeln!(out, "-- sktilde_avg --").map_err(handler_err)?;
-        writeln!(out, "  frame_count : {:?}", sktilde_avg.len()).map_err(handler_err)?;
-        writeln!(out, "  frames_in_queue : {:?}", sktilde_avg.queue_len()).map_err(handler_err)?;
         writeln!(out, "  frame_shape : {:?}", sktilde_avg.shape()).map_err(handler_err)?;
 
         if let Some(frame) = sktilde_avg.last_frame() {
@@ -194,8 +188,6 @@ pub async fn last_frame(State(state): State<AppState>) -> Result<String, (Status
 
     if let Some(skbar_avg) = state.buffers.skbar_avg.get() {
         writeln!(out, "-- skbar_avg --").map_err(handler_err)?;
-        writeln!(out, "  frame_count : {:?}", skbar_avg.len()).map_err(handler_err)?;
-        writeln!(out, "  frames_in_queue : {:?}", skbar_avg.queue_len()).map_err(handler_err)?;
         writeln!(out, "  frame_shape : {:?}", skbar_avg.shape()).map_err(handler_err)?;
 
         if let Some(frame) = skbar_avg.last_frame() {
@@ -211,13 +203,12 @@ pub async fn last_frame(State(state): State<AppState>) -> Result<String, (Status
 /// `GET /write-data` - dump buffers into a set of .npy files.
 ///
 /// Only available in debug builds.
-#[cfg(debug_assertions)]
 #[derive(Deserialize)]
 pub struct DumpParams {
     path: String,
+    nsamples: usize,
 }
 
-#[cfg(debug_assertions)]
 pub async fn write_buffers(
     Query(params): Query<DumpParams>,
     State(state): State<AppState>,
@@ -245,30 +236,42 @@ pub async fn write_buffers(
             path.display()
         )));
     }
-    if let Some(sktilde_avg) = state.buffers.sktilde_avg.get()
-        && let Some(arr) = sktilde_avg.stack_array(0)
-        && let Some(mask) = sktilde_avg.stack_mask()
-    {
-        let mut path = params.path.clone();
-        path.push_str("/sktilde_avg.npy");
-        write_npy(path, &arr).map_err(handler_err)?;
-        // write the mask out as well
-        let mut path = params.path.clone();
-        path.push_str("/sktilde_avg_mask.npy");
-        write_npy(path, &mask).map_err(handler_err)?;
-    }
 
-    if let Some(skbar_avg) = state.buffers.skbar_avg.get()
-        && let Some(arr) = skbar_avg.stack_array(0)
-        && let Some(mask) = skbar_avg.stack_mask()
+    if let Some(sktilde_avg) = state.buffers.sktilde_avg.get()
+        && let Some(skbar_avg) = state.buffers.skbar_avg.get()
     {
-        let mut path = params.path.clone();
-        path.push_str("/skbar_avg.npy");
-        write_npy(path, &arr).map_err(handler_err)?;
-        // write the mask
-        let mut path = params.path.clone();
-        path.push_str("/skbar_avg_mask.npy");
-        write_npy(path, &mask).map_err(handler_err)?;
+        let n: usize = params.nsamples;
+        let (sktilde_vec, skbar_vec) =
+            tokio::join!(sktilde_avg.accumulate(n), skbar_avg.accumulate(n));
+
+        // unpack and propagate errors
+        let sktilde_vec = sktilde_vec.map_err(handler_err)?;
+        let skbar_vec = skbar_vec.map_err(handler_err)?;
+
+        // stack into array and mask and write out
+        if let Some(arr) = stack_buffer_array(&sktilde_vec, 0)
+            && let Some(mask) = stack_buffer_mask(&sktilde_vec)
+        {
+            let mut path = params.path.clone();
+            path.push_str("/sktilde_avg.npy");
+            write_npy(path, &arr).map_err(handler_err)?;
+            // write the mask out as well
+            let mut path = params.path.clone();
+            path.push_str("/sktilde_avg_mask.npy");
+            write_npy(path, &mask).map_err(handler_err)?;
+        }
+
+        if let Some(arr) = stack_buffer_array(&skbar_vec, 0)
+            && let Some(mask) = stack_buffer_mask(&skbar_vec)
+        {
+            let mut path = params.path.clone();
+            path.push_str("/skbar_avg.npy");
+            write_npy(path, &arr).map_err(handler_err)?;
+            // write the mask
+            let mut path = params.path.clone();
+            path.push_str("/skbar_avg_mask.npy");
+            write_npy(path, &mask).map_err(handler_err)?;
+        }
     }
 
     Ok::<_, (StatusCode, String)>((StatusCode::OK, params.path.clone()))

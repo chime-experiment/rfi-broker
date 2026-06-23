@@ -1,16 +1,18 @@
 //! Axum endpoints and associated functions.
+#[cfg(debug_assertions)]
 use {
+    crate::buffer::{stack_buffer_array, stack_buffer_mask},
     axum::extract::Query,
     ndarray::Axis,
+    ndarray_npy::write_npy,
+    serde::Deserialize,
     std::{fmt::Write, path::Path},
+    tokio::time::Duration,
 };
 
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use prometheus_client::encoding::text::encode;
 
-use {ndarray_npy::write_npy, serde::Deserialize};
-
-use crate::buffer::{stack_buffer_array, stack_buffer_mask};
 use crate::state::AppState;
 
 /// Return an error as an ``INTERNAL_SERVER_ERROR``.
@@ -157,7 +159,8 @@ pub async fn get_bad_input_likelihood(
     Ok::<_, (StatusCode, String)>(Json(result))
 }
 
-/// `GET /last-frame` — snapshot most recent frame in all dataset ring buffers.
+#[cfg(debug_assertions)]
+/// `GET /last-frame` — snapshot most recent frame in all dataset buffers.
 pub async fn last_frame(State(state): State<AppState>) -> Result<String, (StatusCode, String)> {
     let mut out = String::new();
 
@@ -198,14 +201,16 @@ pub async fn last_frame(State(state): State<AppState>) -> Result<String, (Status
     Ok(out)
 }
 
-/// POST arguments for `write_buffers`.
+#[cfg(debug_assertions)]
+/// Query arguments for `write_buffers`.
 #[derive(Deserialize)]
 pub struct DumpParams {
     path: String,
     nsamples: usize,
 }
 
-/// `GET /write-data` - dump buffers into a set of .npy files.
+#[cfg(debug_assertions)]
+/// `POST /write-buffers` - dump buffers into a set of .npy files.
 pub async fn write_buffers(
     Query(params): Query<DumpParams>,
     State(state): State<AppState>,
@@ -234,12 +239,17 @@ pub async fn write_buffers(
         )));
     }
 
+    let n = params.nsamples;
+    // large timeout in case there's any network latency
+    let timeout = Duration::from_secs(2);
+
     if let Some(sktilde_avg) = state.buffers.sktilde_avg.get()
         && let Some(skbar_avg) = state.buffers.skbar_avg.get()
     {
-        let n: usize = params.nsamples;
-        let (sktilde_vec, skbar_vec) =
-            tokio::join!(sktilde_avg.accumulate(n), skbar_avg.accumulate(n));
+        let (sktilde_vec, skbar_vec) = tokio::join!(
+            sktilde_avg.accumulate(n, timeout),
+            skbar_avg.accumulate(n, timeout)
+        );
 
         // unpack and propagate errors
         let sktilde_vec = sktilde_vec.map_err(handler_err)?;

@@ -20,7 +20,7 @@ use crate::stats;
 
 /// Bad input likelihood lookback num samples
 const BAD_INPUT_LIKELIHOOD_LOOKBACK: u16 = 32;
-/// Maximum number of array frames retained in the ring buffer
+/// Broadcast channel depth for frame events
 const TX_BUFFER_CAPACITY: usize = 32;
 
 /// Store for computed quantities.

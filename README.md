@@ -60,8 +60,9 @@ The following endpoints are exposed in all build profiles:
 - `/human-metrics`: basic human-readable metrics
 - `/bad_input_likelihood`: per-input metric containing the likelihood of the input being corrupted
 - `/`: prints `bad_input_likelihood`
-- `/last-frame`: prints the most recent frame in each ringbuffer, and buffer length and shape
-- `/write-buffers`: POST - writes both spectral kurtosis buffers and masks to a provided directory
+### Debug-only
+- `/last-frame`: prints the most recent frame in each buffer, plus frame shape
+- `/write-buffers`: POST - accumulates `nsamples` frames from both spectral kurtosis buffers and writes arrays/masks to a provided directory
 
 # Tests
 Unit tests can be run using

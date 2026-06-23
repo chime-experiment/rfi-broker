@@ -2,7 +2,6 @@
 #[cfg(debug_assertions)]
 use {
     crate::buffer::{stack_buffer_array, stack_buffer_mask},
-    axum::extract::Query,
     ndarray::Axis,
     ndarray_npy::write_npy,
     serde::Deserialize,
@@ -212,8 +211,8 @@ pub struct DumpParams {
 #[cfg(debug_assertions)]
 /// `POST /write-buffers` - dump buffers into a set of .npy files.
 pub async fn write_buffers(
-    Query(params): Query<DumpParams>,
     State(state): State<AppState>,
+    Json(params): Json<DumpParams>,
 ) -> Result<impl IntoResponse, impl IntoResponse> {
     // validate the provided path
     let path = Path::new(&params.path);

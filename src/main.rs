@@ -1,7 +1,9 @@
-//! Entry point for the HTTP server binary.
+//! Broker managing RFI-related tasks.
 //!
-//! Parses CLI arguments, loads configuration file, builds a
-//! multi-threaded tokio runtime, and runs the async server.
+//! Tasks include:
+//! - Provides a per-feed likelihood that the feed is corrupted based on spectral kurtosis data
+//! - Enables and disables RFI zeroing around solar noon
+//! - Exports some Prometheus metrics
 
 use std::net::SocketAddr;
 use std::path::PathBuf;

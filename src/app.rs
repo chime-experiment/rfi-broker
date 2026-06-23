@@ -5,8 +5,6 @@
 //! - ``metrics``: Application prometheus metrics
 //! - ``human-metrics``: Some human-readable metrics
 //! - ``bad_input_likelihood``: per-input likelihood of a feed being corrupted
-//!
-//! # Debug endpoints
 //! - ``last-frame``: Pretty print of most recent buffer frame
 //! - ``write-buffers``: POST with directory to write SK buffers
 

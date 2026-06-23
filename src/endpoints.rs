@@ -38,7 +38,7 @@ pub async fn metadata(State(state): State<AppState>) -> impl IntoResponse {
     Ok::<_, (StatusCode, String)>(Json(meta))
 }
 
-/// `GET /metrics` - dumps metrics in a human-readable way.
+/// `GET /human-metrics` - dumps metrics in a human-readable way.
 ///
 /// Returns `500` if serialisation fails.
 pub async fn human_metrics(
@@ -158,8 +158,6 @@ pub async fn get_bad_input_likelihood(
 }
 
 /// `GET /last-frame` — snapshot most recent frame in all dataset ring buffers.
-///
-/// Only exists in debug builds
 pub async fn last_frame(State(state): State<AppState>) -> Result<String, (StatusCode, String)> {
     let mut out = String::new();
 
@@ -200,15 +198,14 @@ pub async fn last_frame(State(state): State<AppState>) -> Result<String, (Status
     Ok(out)
 }
 
-/// `GET /write-data` - dump buffers into a set of .npy files.
-///
-/// Only available in debug builds.
+/// POST arguments for `write_buffers`.
 #[derive(Deserialize)]
 pub struct DumpParams {
     path: String,
     nsamples: usize,
 }
 
+/// `GET /write-data` - dump buffers into a set of .npy files.
 pub async fn write_buffers(
     Query(params): Query<DumpParams>,
     State(state): State<AppState>,

@@ -1,4 +1,4 @@
-//! Generic shared ring buffer of array frames.
+//! Generic shared buffer of array frames.
 //!
 //! The shape and dimensions are fixed at construction time; frames with
 //! a mismatched shape are dropped on push.
@@ -19,7 +19,7 @@ use num_traits::Num;
 const PARTIAL_FRAME_CAPACITY: usize = 8;
 const MIN_FRAME_SAMPLE_COUNT: u64 = 1;
 
-/// Single [`RingBuffer`] frame.
+/// Single [`Buffer`] frame.
 ///
 /// Contains an array, mask, and ID.
 #[derive(Clone, Debug, PartialEq)]
@@ -113,17 +113,21 @@ where
 
 pub type SharedFrame<T> = Arc<Frame<T>>;
 
-/// Ring buffer of decoded frames, shared across tasks.
+/// Buffer of decoded partial frames, shared across tasks.
+///
+/// Once a [`Frame`] is complete, it gets pushed to all subscribers,
+/// which are registered by calling `.subscribe()`.
+///
+/// The broadcast channel length is set at compile time by the
+/// `N` parameter.
 ///
 /// All frames are required to have the same shape, which is fixed at
 /// construction. Pushes that violate this are dropped.
-///
-/// The inner [`RwLock`] is held only for push/snapshot operations.
 #[derive(Debug)]
 pub struct Buffer<T, const N: usize> {
     /// Expected shape of each frame
     frame_shape: Vec<usize>,
-    /// Store a partial frames
+    /// Store partial frames
     partial_frames: Mutex<BTreeMap<u64, Frame<T>>>,
     /// Holds the most recent frame for quick access
     last_frame: OnceLock<SharedFrame<T>>,
@@ -135,7 +139,7 @@ impl<T, const N: usize> Buffer<T, N>
 where
     T: Num + Clone,
 {
-    /// Create a new ringbuffer with a fixed shape.
+    /// Create a new buffer with a fixed shape.
     pub fn new(frame_shape: Vec<usize>) -> Self {
         let (tx, _) = broadcast::channel(N);
         Self {
@@ -146,14 +150,12 @@ where
         }
     }
 
-    /// Return the shape of each frame
+    /// Return the shape of each frame.
     pub const fn shape(&self) -> &Vec<usize> {
         &self.frame_shape
     }
 
     /// Get the most recently pushed frame.
-    ///
-    /// `Arc` is cloned internally
     pub fn last_frame(&self) -> Option<SharedFrame<T>> {
         self.last_frame.get().map(Arc::clone)
     }
@@ -164,7 +166,7 @@ where
     /// new frame is created and pushed to the buffer.
     ///
     /// Because this sends an `Arc`, the underlying data array is not
-    /// cloned, making sharing cheap.
+    /// cloned.
     pub fn subscribe(&self) -> broadcast::Receiver<SharedFrame<T>> {
         self.tx.subscribe()
     }
@@ -173,13 +175,14 @@ where
     /// internal `last_frame`.
     fn push(&self, frame: Frame<T>) {
         let shared_frame = Arc::new(frame);
+        // NB: errors are quietly dropped instead of propagated
         // record that this is the most recent frame
         let _ = self.last_frame.set(Arc::clone(&shared_frame));
         // send to all subscibers
         let _ = self.tx.send(shared_frame);
     }
 
-    /// Push all partial frames into the buffer.
+    /// Push all partial frames to subscribers.
     pub fn flush(&self) -> usize {
         // Need to hold this guard throughout
         let mut guard = self.partial_frames.lock();
@@ -193,9 +196,9 @@ where
         num_frames
     }
 
-    /// Add an array to a frame and push the frame to the buffer if it is full.
+    /// Add an array to a frame and push the frame if it is full.
     ///
-    /// If the frame is full, push directly to the buffer. Otherwise, store
+    /// If the frame is full, push to subscribers. Otherwise, store
     /// in a map under the assumption that the rest of the frame will be
     /// received.
     ///
@@ -269,9 +272,9 @@ where
         Ok(key)
     }
 
-    /// Add a ``Vec`` to the ringbuffer, converting it into [`ArrayD`].
+    /// Add a ``Vec`` to the buffer, converting it into [`ArrayD`].
     ///
-    /// The ``Vec`` is consumed so that we can avoid a copy.
+    /// The ``Vec`` is consumed to avoid a copy.
     pub fn push_vec(
         &self,
         vec: Vec<T>,
@@ -295,7 +298,7 @@ where
         self.push_array(&arr, id, indices, axis)
     }
 
-    /// Accumulate `N` frames and return as a Vec.
+    /// Accumulate `n` frames and return as a [`Vec`].
     pub async fn accumulate(&self, n: usize) -> eyre::Result<Vec<SharedFrame<T>>> {
         // subscribe to the internal sender
         let mut rx = self.tx.subscribe();

@@ -3,7 +3,7 @@
 Deals with a few tasks related to RFI flagging:
 - Provides a per-feed likelihood that the feed is corrupted based on spectral kurtosis data
 - Enables and disables RFI zeroing around solar noon
-- Exports some useful Prometheus metrics
+- Exports some Prometheus metrics
 
 This is intended to run on an auxiliary node. It is tightly coupled to the data being sent from
 kotekan - namely, the packet structure defined in
@@ -60,8 +60,6 @@ The following endpoints are exposed in all build profiles:
 - `/human-metrics`: basic human-readable metrics
 - `/bad_input_likelihood`: per-input metric containing the likelihood of the input being corrupted
 - `/`: prints `bad_input_likelihood`
-
-Debug-only:
 - `/last-frame`: prints the most recent frame in each ringbuffer, and buffer length and shape
 - `/write-buffers`: POST - writes both spectral kurtosis buffers and masks to a provided directory
 

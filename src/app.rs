@@ -5,8 +5,10 @@
 //! - ``metrics``: Application prometheus metrics
 //! - ``human-metrics``: Some human-readable metrics
 //! - ``bad_input_likelihood``: per-input likelihood of a feed being corrupted
+//!
+//! ## Debug-only
 //! - ``last-frame``: Pretty print of most recent buffer frame
-//! - ``write-buffers``: POST with directory to write SK buffers
+//! - ``write-buffers``: POST with `path` + `nsamples` to accumulate and write SK buffers
 
 use std::io::ErrorKind::WouldBlock;
 use std::net::SocketAddr;
@@ -14,10 +16,12 @@ use std::sync::Arc;
 
 use eyre::WrapErr;
 
-#[cfg(debug_assertions)]
-use axum::middleware::{self, Next};
-use axum::routing::post;
 use axum::{Router, routing::get};
+#[cfg(debug_assertions)]
+use {
+    axum::middleware::{self, Next},
+    axum::routing::post,
+};
 
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::time::{Duration, Instant, sleep_until};
@@ -68,7 +72,10 @@ fn make_router(state: AppState) -> Router {
             "/bad_input_likelihood",
             get(endpoints::get_bad_input_likelihood),
         )
-        .route("/", get(endpoints::dump_bad_input_likelihood))
+        .route("/", get(endpoints::dump_bad_input_likelihood));
+
+    #[cfg(debug_assertions)]
+    let router = router
         .route("/last-frame", get(endpoints::last_frame))
         .route("/write-buffers", post(endpoints::write_buffers));
 

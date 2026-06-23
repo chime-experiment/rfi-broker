@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
 use tokio::sync::broadcast;
+use tokio::time::{Duration, sleep};
 
 use eyre::{OptionExt, WrapErr, bail, eyre};
 
@@ -299,29 +300,42 @@ where
     }
 
     /// Accumulate `n` frames and return as a [`Vec`].
-    pub async fn accumulate(&self, n: usize) -> eyre::Result<Vec<SharedFrame<T>>> {
+    pub async fn accumulate(
+        &self,
+        n: usize,
+        item_timeout: impl Into<Option<Duration>>,
+    ) -> eyre::Result<Vec<SharedFrame<T>>> {
         // subscribe to the internal sender
         let mut rx = self.tx.subscribe();
         let mut buf = Vec::with_capacity(n);
 
+        let item_timeout = item_timeout.into().unwrap_or(Duration::from_millis(50));
+
         while buf.len() < n {
-            match rx.recv().await {
-                Ok(frame) => buf.push(frame),
-                Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                    bail!("receive buffer overflowed - {skipped} frames were missed");
+            tokio::select! {
+                biased; // always poll the buffer first
+                result = rx.recv() => {
+                    match result {
+                        Ok(frame) => buf.push(frame),
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            bail!("receive buffer overflowed - {skipped} frames were missed");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            bail!("sender was dropped before accumulation was complete");
+                        }
+                    }
                 }
-                Err(broadcast::error::RecvError::Closed) => {
-                    bail!("sender was dropped before accumulation was complete");
+                () = sleep(item_timeout) => {
+                    bail!("timed out while waiting for frames");
                 }
             }
         }
-        // shrink capacity in case loop returned early
-        buf.shrink_to_fit();
 
         Ok(buf)
     }
 }
 
+#[allow(dead_code, reason = "used in tests and debug endpoints")]
 /// Return an `N+1` dimensional [`ArrayD`] stacked over an axis, or `None`
 /// if no frames available.
 ///
@@ -341,6 +355,7 @@ where
     ndarray::stack(ax, &views).ok()
 }
 
+#[allow(dead_code, reason = "used in tests and debug endpoints")]
 /// Stack the frame masks, creating a new outermost axis.
 pub fn stack_buffer_mask<T>(buffer: &[SharedFrame<T>]) -> Option<Array2<u8>>
 where
@@ -424,7 +439,7 @@ mod tests {
         let buf_clone = Arc::clone(&buf);
         let handle = tokio::spawn(async move {
             tx.send(()).unwrap();
-            buf_clone.accumulate(2).await
+            buf_clone.accumulate(2, None).await
         });
 
         // wait for spawned task

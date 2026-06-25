@@ -66,12 +66,12 @@ impl Default for Metrics {
 
         // populate registry
         registry.register(
-            "rfibroker_packets_received_total",
+            "rfibroker_packets_received",
             "Total packets received",
             packet_loss.total.clone(),
         );
         registry.register(
-            "rfibroker_packets_dropped_total",
+            "rfibroker_packets_dropped",
             "Total packets dropped",
             packet_loss.lost.clone(),
         );

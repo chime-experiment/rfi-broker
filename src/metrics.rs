@@ -78,13 +78,13 @@ impl EncodeLabelSet for IndexLabel {
     fn encode(&self, encoder: &mut LabelSetEncoder<'_>) -> Result<(), std::fmt::Error> {
         let mut label = encoder.encode_label();
 
-        let mut key_encoder = label.encode_label_key()?;
-        key_encoder.write_str(self.name)?;
+        let mut key = label.encode_label_key()?;
+        key.write_str(self.name)?;
 
-        let mut value_encoder = key_encoder.encode_label_value()?;
-        value_encoder.write_str(&self.index.to_string())?;
+        let mut value = key.encode_label_value()?;
+        value.write_str(&self.index.to_string())?;
 
-        Ok(())
+        value.finish()
     }
 }
 

@@ -193,20 +193,20 @@ impl Buffers {
     }
 
     /// Flush all buffers - that is, push all partial frames.
-    pub fn flush(&self) -> usize {
+    pub fn flush(&self) -> eyre::Result<usize> {
         let mut nflushed = 0;
 
         if let Some(buf) = self.frac_flagged.get() {
-            nflushed += buf.flush();
+            nflushed += buf.flush()?;
         }
         if let Some(buf) = self.sktilde_avg.get() {
-            nflushed += buf.flush();
+            nflushed += buf.flush()?;
         }
         if let Some(buf) = self.skbar_avg.get() {
-            nflushed += buf.flush();
+            nflushed += buf.flush()?;
         }
 
-        nflushed
+        Ok(nflushed)
     }
 }
 

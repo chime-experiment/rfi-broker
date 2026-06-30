@@ -187,14 +187,16 @@ async fn packet_handler_task(
 
             () = &mut flush_timer => {
                 // Flush any pending data to the state buffer and reset the timer
-                let nsamp = buffers.flush();
+                buffers.flush()
+                    .inspect(|&n| if n > 0 {
+                        tracing::info!(
+                            "No packets received for {DATA_STATE_FLUSH_TIMEOUT_SECONDS}s - \
+                            flushed {n} pending samples to state buffers"
+                        );
+                    })
+                    .inspect_err(|err| tracing::warn!(error = ?err, "failed to flush buffers"))
+                    .ok();
 
-                if nsamp > 0 {
-                    tracing::info!(
-                        "No packets received for {DATA_STATE_FLUSH_TIMEOUT_SECONDS}s - \
-                        flushed {nsamp} pending samples to state buffers"
-                    );
-                }
                 // log the next time we start receiving packets
                 log_packet_recv =  true;
             }

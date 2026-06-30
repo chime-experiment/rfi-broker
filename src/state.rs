@@ -9,8 +9,6 @@ use std::sync::{Arc, OnceLock};
 use eyre::OptionExt;
 use parking_lot::Mutex;
 
-use axum::extract::FromRef;
-
 use prometheus_client::registry::Registry;
 
 use crate::buffer::Buffer;
@@ -216,7 +214,7 @@ impl Buffers {
 ///
 /// Intended to be wrapped with an [`Arc`] for use with
 /// [`tokio`] and [`axum`].
-#[derive(Default, Clone, FromRef)]
+#[derive(Default, Clone)]
 pub struct AppState {
     /// Application metrics
     pub metrics: Arc<Metrics>,

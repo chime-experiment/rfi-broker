@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::Parser;
-use eyre::WrapErr;
+use eyre::{WrapErr, eyre};
 
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -108,6 +108,10 @@ fn init_tracing() {
 
 /// Parses CLI, resolves config, and starts the server.
 fn main() -> eyre::Result<()> {
+    rustls_graviola::default_provider()
+        .install_default()
+        .map_err(|_| eyre!("failed to install default `rustls` crypto provider"))?;
+
     // Set up logging
     init_tracing();
 

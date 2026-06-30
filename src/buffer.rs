@@ -8,11 +8,15 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
 use tokio::sync::broadcast;
-use tokio::time::{Duration, sleep};
+#[cfg(any(debug_assertions, test))]
+use {
+    ndarray::Array2,
+    tokio::time::{Duration, sleep},
+};
 
 use eyre::{OptionExt, WrapErr, bail, eyre};
 
-use ndarray::{Array2, ArrayD, ArrayViewD, Axis, IxDyn};
+use ndarray::{ArrayD, ArrayViewD, Axis, IxDyn};
 use num_traits::Num;
 
 /// Constants managing how/when a partial frame should stop accumulating
@@ -149,11 +153,6 @@ where
             last_frame: OnceLock::<SharedFrame<T>>::default(),
             tx,
         }
-    }
-
-    /// Return the shape of each frame.
-    pub const fn shape(&self) -> &Vec<usize> {
-        &self.frame_shape
     }
 
     /// Get the most recently pushed frame.
@@ -298,6 +297,17 @@ where
 
         self.push_array(&arr, id, indices, axis)
     }
+}
+
+#[cfg(any(debug_assertions, test))]
+impl<T, const N: usize> Buffer<T, N>
+where
+    T: Num + Clone,
+{
+    /// Return the shape of each frame.
+    pub const fn shape(&self) -> &Vec<usize> {
+        &self.frame_shape
+    }
 
     /// Accumulate `n` frames and return as a [`Vec`].
     pub async fn accumulate(
@@ -335,7 +345,7 @@ where
     }
 }
 
-#[allow(dead_code, reason = "used in tests and debug endpoints")]
+#[cfg(any(debug_assertions, test))]
 /// Return an `N+1` dimensional [`ArrayD`] stacked over an axis, or `None`
 /// if no frames available.
 ///
@@ -355,7 +365,7 @@ where
     ndarray::stack(ax, &views).ok()
 }
 
-#[allow(dead_code, reason = "used in tests and debug endpoints")]
+#[cfg(any(debug_assertions, test))]
 /// Stack the frame masks, creating a new outermost axis.
 pub fn stack_buffer_mask<T>(buffer: &[SharedFrame<T>]) -> Option<Array2<u8>>
 where
@@ -439,9 +449,11 @@ mod tests {
         let buf_clone = Arc::clone(&buf);
         let handle = tokio::spawn(async move {
             tx.send(()).unwrap();
-            buf_clone.accumulate(2, None).await
+            buf_clone.accumulate(2, Duration::from_secs(1)).await
         });
 
+        // sleep for a moment to ensure that the accumulate call is listening
+        sleep(Duration::from_millis(500)).await;
         // wait for spawned task
         rx.await?;
 

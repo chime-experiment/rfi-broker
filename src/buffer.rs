@@ -3,7 +3,7 @@
 //! The shape and dimensions are fixed at construction time; frames with
 //! a mismatched shape are dropped on push.
 
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
@@ -135,7 +135,7 @@ pub struct Buffer<T, const N: usize> {
     /// Store partial frames
     partial_frames: Mutex<BTreeMap<u64, Frame<T>>>,
     /// Holds the most recent frame for quick access
-    last_frame: OnceLock<SharedFrame<T>>,
+    last_frame: OnceLock<RwLock<SharedFrame<T>>>,
     /// broadcast sender for new frame events
     tx: broadcast::Sender<SharedFrame<T>>,
 }
@@ -150,14 +150,14 @@ where
         Self {
             frame_shape,
             partial_frames: Mutex::new(BTreeMap::<u64, Frame<T>>::new()),
-            last_frame: OnceLock::<SharedFrame<T>>::default(),
+            last_frame: OnceLock::<RwLock<SharedFrame<T>>>::default(),
             tx,
         }
     }
 
     /// Get the most recently pushed frame.
     pub fn last_frame(&self) -> Option<SharedFrame<T>> {
-        self.last_frame.get().map(Arc::clone)
+        self.last_frame.get().map(|lock| lock.read().clone())
     }
 
     /// Subscribe to a new frame event broadcast.
@@ -173,27 +173,39 @@ where
 
     /// Sends a frame to all subscribers and update the
     /// internal `last_frame`.
-    fn push(&self, frame: Frame<T>) {
+    fn push(&self, frame: Frame<T>) -> eyre::Result<()> {
         let shared_frame = Arc::new(frame);
-        // NB: errors are quietly dropped instead of propagated
-        // record that this is the most recent frame
-        let _ = self.last_frame.set(Arc::clone(&shared_frame));
-        // send to all subscibers
-        let _ = self.tx.send(shared_frame);
+        // NB: there's a double write for the first frame received
+        *self
+            .last_frame
+            .get_or_init(|| RwLock::new(Arc::clone(&shared_frame)))
+            .write() = Arc::clone(&shared_frame);
+
+        // send to all subscibers, if they exist
+        if self.tx.receiver_count() > 0 {
+            self.tx.send(shared_frame).map_err(|_| {
+                eyre!(
+                    "broadcast failed unexpectedly - number of receivers is {:?}",
+                    self.tx.receiver_count()
+                )
+            })?;
+        }
+
+        Ok(())
     }
 
     /// Push all partial frames to subscribers.
-    pub fn flush(&self) -> usize {
+    pub fn flush(&self) -> eyre::Result<usize> {
         // Need to hold this guard throughout
         let mut guard = self.partial_frames.lock();
 
         let num_frames = guard.len();
 
         while let Some((_, frame)) = guard.pop_first() {
-            self.push(frame);
+            self.push(frame)?;
         }
 
-        num_frames
+        Ok(num_frames)
     }
 
     /// Add an array to a frame and push the frame if it is full.
@@ -239,7 +251,7 @@ where
                     .ok_or_eyre("unexpected failure extracting partial frame")?;
                 // Only push frames with a minimum sample count
                 if frame.sample_count >= MIN_FRAME_SAMPLE_COUNT {
-                    self.push(frame);
+                    self.push(frame)?;
                 } else {
                     tracing::debug!(
                         "Dropped frame with sequence number {} because sample count {} is below \
@@ -266,7 +278,7 @@ where
                 eyre!("unexpected failure getting key {key}, which is expected to exist")
             })?;
 
-            self.push(filled_frame);
+            self.push(filled_frame)?;
         }
 
         Ok(key)

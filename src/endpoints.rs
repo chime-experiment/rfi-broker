@@ -125,16 +125,19 @@ pub async fn dump_bad_input_likelihood(
     let Some(metric) = state.computed.bad_input_likelihood.value() else {
         return Err(handler_err("data buffer not initialized"));
     };
+    // max width per formatted number is 6 ("100.00") plus 2 for the separator
+    let mut out = String::with_capacity(22 + metric.len() * 8);
+    out.push_str("rfi_bad_input_mask = [");
 
-    let metric_fmt = metric
-        .iter()
-        // the caller for this endpoint assumes a percentage value,
-        // while the likelihood is computed from 0.0 to 1.0.
-        .map(|x| format!("{:.2}", 100.0 * x))
-        .collect::<Vec<_>>()
-        .join(", ");
+    for (i, x) in metric.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        write!(out, "{:.2}", 100.0 * x).map_err(handler_err)?;
+    }
+    out.push_str("]\n");
 
-    Ok(format!("rfi_bad_input_mask = [{metric_fmt}]\n"))
+    Ok(out)
 }
 
 /// `GET /inputs` - likelihood that any given input is corrupted.

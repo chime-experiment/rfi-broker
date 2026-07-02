@@ -474,14 +474,14 @@ mod tests {
             buf.push_array(&arr.clone(), i as u64, &[0, 1], 0)?;
         }
         // flush frames to the buffer to ensure that everything has been sent
-        buf.flush();
+        buf.flush()?;
 
         // grab the received vec
         let received = handle.await??;
 
         // assert that the last frame was flushed
         assert!(!received.is_empty(), "frame was never received");
-        assert_eq!(received.first().unwrap(), &buf.last_frame().unwrap());
+        assert_eq!(received.last().unwrap(), &buf.last_frame().unwrap());
 
         // Stack both buffers over the 0th axis
         let arr_stack = stack_buffer_array(&received, 0).unwrap();

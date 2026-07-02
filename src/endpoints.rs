@@ -5,12 +5,13 @@ use {
     ndarray::Axis,
     ndarray_npy::write_npy,
     serde::Deserialize,
-    std::{fmt::Write, path::Path},
+    std::path::Path,
     tokio::time::Duration,
 };
 
 use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 use prometheus_client::encoding::text::encode;
+use std::fmt::Write;
 
 use crate::state::AppState;
 
@@ -82,7 +83,7 @@ pub async fn metrics(
         state
             .metrics
             .bad_input_likelihood
-            .update_from_slice(&likelihood)
+            .update_from_slice(&likelihood, None)
             .map_err(handler_err)?;
     }
 
@@ -93,7 +94,7 @@ pub async fn metrics(
         state
             .metrics
             .sktilde_avg
-            .update_from_slice(arr)
+            .update_from_slice(arr, Some(&frame.mask))
             .map_err(handler_err)?;
     }
 
@@ -104,7 +105,7 @@ pub async fn metrics(
         state
             .metrics
             .frac_flagged
-            .update_from_slice(arr)
+            .update_from_slice(arr, Some(&frame.mask))
             .map_err(handler_err)?;
     }
 

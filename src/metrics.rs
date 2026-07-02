@@ -4,7 +4,7 @@ use std::fmt::Write;
 use std::sync::OnceLock;
 
 use eyre::bail;
-
+use num_traits::Float;
 use prometheus_client::{
     encoding::{EncodeLabelSet, LabelSetEncoder},
     metrics::{
@@ -97,6 +97,7 @@ impl EncodeLabelSet for IndexLabel {
 #[derive(Debug, Default)]
 pub struct LazyGaugeFamily<T, A>
 where
+    T: Float,
     Gauge<T, A>: Clone,
 {
     label_name: &'static str,
@@ -106,6 +107,7 @@ where
 
 impl<T, A> LazyGaugeFamily<T, A>
 where
+    T: Float,
     Gauge<T, A>: Clone,
     Family<IndexLabel, Gauge<T, A>>: Default,
 {
@@ -120,7 +122,7 @@ where
 
 impl<T, A> LazyGaugeFamily<T, A>
 where
-    T: Copy,
+    T: Float + Copy,
     A: Atomic<T>,
     Gauge<T, A>: Clone,
 {
@@ -130,7 +132,10 @@ where
     /// Gauges are created the first time this is called, and all
     /// subsequent calls must provide a slice with the same length
     /// as the first call.
-    pub fn update_from_slice(&self, values: &[T]) -> eyre::Result<()> {
+    ///
+    /// Uses a boolean mask to determine if the update value is valid.
+    /// Invalid values are set to `f64::NAN`.
+    pub fn update_from_slice(&self, values: &[T], mask: Option<&[bool]>) -> eyre::Result<()> {
         let name = self.label_name;
 
         let handles = self.handles.get_or_init(|| {
@@ -153,8 +158,29 @@ where
 
         // Update gauge values. This is the only computation that happens
         // beyond the first call
-        for (gauge, value) in handles.iter().zip(values.iter().copied()) {
-            gauge.set(value);
+        match mask {
+            Some(mask) => {
+                // validate slice lengths
+                if values.len() != mask.len() {
+                    bail!(
+                        "values and mask slices have different lengths: {} != {}",
+                        values.len(),
+                        mask.len()
+                    );
+                }
+                // write NaN for values without a real sample
+                for ((gauge, value), valid) in
+                    handles.iter().zip(values.iter().copied()).zip(mask.iter())
+                {
+                    let v: T = if *valid { value } else { T::nan() };
+                    gauge.set(v);
+                }
+            }
+            None => {
+                for (gauge, value) in handles.iter().zip(values.iter().copied()) {
+                    gauge.set(value);
+                }
+            }
         }
 
         Ok(())
@@ -164,6 +190,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::assert_abs_diff_eq;
+    use core::sync::atomic::AtomicU32;
 
     #[test]
     /// Test that the [`SampleLossTracker`] produces the expected result.
@@ -190,5 +218,49 @@ mod tests {
             (frac - 0.2).abs() < 1.0e-6,
             "`frac_lost`={frac} is not within tolerance `1.0e-6` of expectation=`0.2`"
         );
+    }
+
+    #[test]
+    /// Test that `LazyGaugeFamily` metrics update correctly.
+    fn test_update_from_slice() -> Result<(), Box<dyn std::error::Error>> {
+        let gauge_family = LazyGaugeFamily::<f32, AtomicU32>::new("id");
+
+        let values: Vec<f32> = vec![3.3, 1.2, 7.9];
+        let mask: Vec<bool> = vec![true, false, true];
+
+        // push the unmasked values and check
+        gauge_family.update_from_slice(&values, None)?;
+        for (i, v) in values.iter().enumerate() {
+            let label = IndexLabel {
+                name: "id",
+                index: i,
+            };
+            if let Some(gauge) = gauge_family.values.get(&label) {
+                assert_abs_diff_eq!(*v, gauge.get(), epsilon = 1e-3);
+            } else {
+                return Err(format!("failed to get gauge with index {i}").into());
+            }
+        }
+
+        // repeat with a mask
+        // push the unmasked values and check
+        gauge_family.update_from_slice(&values, Some(&mask))?;
+        for ((i, v), m) in values.iter().enumerate().zip(mask.iter()) {
+            let label = IndexLabel {
+                name: "id",
+                index: i,
+            };
+            if let Some(gauge) = gauge_family.values.get(&label) {
+                if *m {
+                    assert_abs_diff_eq!(*v, gauge.get(), epsilon = 1e-3);
+                } else {
+                    assert!(gauge.get().is_nan(), "expected NaN, got {:?}", gauge.get());
+                }
+            } else {
+                return Err(format!("failed to get gauge with index {i}").into());
+            }
+        }
+
+        Ok(())
     }
 }

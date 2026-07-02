@@ -173,7 +173,7 @@ where
 
     /// Sends a frame to all subscribers and update the
     /// internal `last_frame`.
-    fn push(&self, frame: Frame<T>) -> eyre::Result<()> {
+    fn push(&self, frame: Frame<T>) {
         let shared_frame = Arc::new(frame);
         // NB: there's a double write for the first frame received
         *self
@@ -181,31 +181,29 @@ where
             .get_or_init(|| RwLock::new(Arc::clone(&shared_frame)))
             .write() = Arc::clone(&shared_frame);
 
-        // send to all subscibers, if they exist
+        // send to all subscribers, if they exist
         if self.tx.receiver_count() > 0 {
-            self.tx.send(shared_frame).map_err(|_| {
-                eyre!(
-                    "broadcast failed unexpectedly - number of receivers is {:?}",
-                    self.tx.receiver_count()
-                )
-            })?;
+            let _ = self.tx.send(shared_frame).inspect_err(|_| {
+                tracing::warn!(
+                    "broadcast send failed; receivers may have disconnected (receiver_count={:?})",
+                    self.tx.receiver_count(),
+                );
+            });
         }
-
-        Ok(())
     }
 
     /// Push all partial frames to subscribers.
-    pub fn flush(&self) -> eyre::Result<usize> {
+    pub fn flush(&self) -> usize {
         // Need to hold this guard throughout
         let mut guard = self.partial_frames.lock();
 
         let num_frames = guard.len();
 
         while let Some((_, frame)) = guard.pop_first() {
-            self.push(frame)?;
+            self.push(frame);
         }
 
-        Ok(num_frames)
+        num_frames
     }
 
     /// Add an array to a frame and push the frame if it is full.
@@ -251,7 +249,7 @@ where
                     .ok_or_eyre("unexpected failure extracting partial frame")?;
                 // Only push frames with a minimum sample count
                 if frame.sample_count >= MIN_FRAME_SAMPLE_COUNT {
-                    self.push(frame)?;
+                    self.push(frame);
                 } else {
                     tracing::debug!(
                         "Dropped frame with sequence number {} because sample count {} is below \
@@ -278,7 +276,7 @@ where
                 eyre!("unexpected failure getting key {key}, which is expected to exist")
             })?;
 
-            self.push(filled_frame)?;
+            self.push(filled_frame);
         }
 
         Ok(key)
@@ -474,7 +472,7 @@ mod tests {
             buf.push_array(&arr.clone(), i as u64, &[0, 1], 0)?;
         }
         // flush frames to the buffer to ensure that everything has been sent
-        buf.flush()?;
+        buf.flush();
 
         // grab the received vec
         let received = handle.await??;

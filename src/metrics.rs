@@ -134,7 +134,7 @@ where
     /// as the first call.
     ///
     /// Uses a boolean mask to determine if the update value is valid.
-    /// Invalid values are set to `f64::NAN`.
+    /// Invalid values are set to `NaN` (via `T::nan()`).
     pub fn update_from_slice(&self, values: &[T], mask: Option<&[bool]>) -> eyre::Result<()> {
         let name = self.label_name;
 
@@ -242,8 +242,7 @@ mod tests {
             }
         }
 
-        // repeat with a mask
-        // push the unmasked values and check
+        // repeat with a mask (false entries should be NaN)
         gauge_family.update_from_slice(&values, Some(&mask))?;
         for ((i, v), m) in values.iter().enumerate().zip(mask.iter()) {
             let label = IndexLabel {

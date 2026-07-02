@@ -292,7 +292,7 @@ mod tests {
         for packet in &packets {
             state.push(packet.clone())?;
         }
-        state.flush();
+        state.flush()?;
 
         // Check that each buffer has been initialized
         let frac_flagged = state

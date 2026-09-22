@@ -197,8 +197,8 @@ pub async fn solar_event_task(
         "solar RFI zeroing task started",
     );
     // Construct the addresses
-    let first_stage_addr = format!("https://{}/{}", &zeroing.hostname, &zeroing.first_stage);
-    let second_stage_addr = format!("https://{}/{}", &zeroing.hostname, &zeroing.second_stage);
+    let first_stage_addr = format!("https://{}/{}", zeroing.hostname, zeroing.first_stage);
+    let second_stage_addr = format!("https://{}/{}", zeroing.hostname, zeroing.second_stage);
 
     // Create a new requests client
     let client = Client::new();

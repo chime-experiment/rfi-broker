@@ -17,10 +17,10 @@ pub struct TelescopeCoordinates {
 #[derive(Debug, serde::Deserialize)]
 pub struct RFIZeroingConfig {
     pub downtime: u64,
-    pub hostname: String,
-    pub target: String,
-    pub first_stage: String,
-    pub second_stage: String,
+    pub url: String,
+    pub toggle_value: String,
+    pub first_stage_endpoint: String,
+    pub second_stage_endpoint: String,
 }
 
 /// Appplication config.

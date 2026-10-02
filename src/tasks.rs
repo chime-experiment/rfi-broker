@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use sunrise::{Coordinates, SolarDay, SolarEvent};
 
 use reqwest::Client;
@@ -15,7 +15,7 @@ use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 
 use eyre::{OptionExt, WrapErr, bail, eyre};
 
-use serde_json::json;
+use serde_json::{Value, json};
 
 use ndarray::Ix2;
 
@@ -127,11 +127,8 @@ async fn post_event(
     client: &Client,
     headers: &HeaderMap,
     endpoint: &str,
-    target: &str,
-    enable: bool,
+    payload: &Value,
 ) -> eyre::Result<reqwest::StatusCode> {
-    let payload = json!({target: enable});
-
     let result = client
         .post(endpoint)
         .headers(headers.clone())
@@ -150,6 +147,7 @@ async fn post_event(
                 .map_or("null".into(), std::string::ToString::to_string)
         );
     }
+    tracing::debug!("sent {payload} to endpoint: {endpoint}");
 
     Ok(status)
 }
@@ -227,32 +225,32 @@ pub async fn solar_event_task(
             clippy::integer_division,
             reason = "integer division downcasting is desired behaviour"
         )]
-        let next_event_start = next_noon.timestamp() - zeroing.downtime.cast_signed() / 2;
-        let next_event_end = next_event_start + zeroing.downtime.cast_signed();
+        let next_event_start = next_noon - TimeDelta::seconds(zeroing.downtime.cast_signed() / 2);
+        let next_event_end = next_event_start + TimeDelta::seconds(zeroing.downtime.cast_signed());
 
         tracing::info!("next solar noon window at {next_noon}");
+        // targets want times in nanoseconds
+        let event_start_ns = next_event_start.timestamp_nanos_opt().unwrap_or(-1);
+        let event_end_ns = next_event_end.timestamp_nanos_opt().unwrap_or(-1);
+
+        let disable_payload = json!({(&zeroing.target): false, "valid_at_time_ns": event_start_ns});
+        let enable_payload = json!({(&zeroing.target): true, "valid_at_time_ns": event_end_ns});
 
         // Sleep until the next zeroing disable event
-        if let Some(t) = seconds_until(next_event_start) {
+        if let Some(t) = seconds_until(next_event_start.timestamp()) {
             tokio::time::sleep(t).await;
             // Send the second-stage event first
             tracing::debug!("sending second-stage `disable` event...");
-            post_event(
-                &client,
-                &headers,
-                &second_stage_addr,
-                &zeroing.target,
-                false,
-            )
-            .await
-            .inspect(|_| metrics.rfi_zeroing.set_second(false))
-            .inspect_err(
-                |err| tracing::warn!(error = ?err, "failed to disable second-stage zeroing"),
-            )
-            .ok();
+            post_event(&client, &headers, &second_stage_addr, &disable_payload)
+                .await
+                .inspect(|_| metrics.rfi_zeroing.set_second(false))
+                .inspect_err(
+                    |err| tracing::warn!(error = ?err, "failed to disable second-stage zeroing"),
+                )
+                .ok();
 
             tracing::debug!("second first-stage `disable` event...");
-            post_event(&client, &headers, &first_stage_addr, &zeroing.target, true)
+            post_event(&client, &headers, &first_stage_addr, &disable_payload)
                 .await
                 .inspect(|_| metrics.rfi_zeroing.set_first(false))
                 .inspect_err(
@@ -264,7 +262,7 @@ pub async fn solar_event_task(
         // Sleep until the next enable event. If the even has passed, we still want
         // to make sure that zeroing is enabled outside of the transit window. The
         // `else` case here should only be accessible on the first pass of this loop.
-        if let Some(t) = seconds_until(next_event_end) {
+        if let Some(t) = seconds_until(next_event_end.timestamp()) {
             tokio::time::sleep(t).await;
         } else {
             tracing::info!(
@@ -275,7 +273,7 @@ pub async fn solar_event_task(
 
         // Send the first-stage event first
         tracing::debug!("sending first-stage `enable` event...");
-        post_event(&client, &headers, &first_stage_addr, &zeroing.target, true)
+        post_event(&client, &headers, &first_stage_addr, &enable_payload)
             .await
             .inspect(|_| metrics.rfi_zeroing.set_first(true))
             .inspect_err(
@@ -284,7 +282,7 @@ pub async fn solar_event_task(
             .ok();
 
         tracing::debug!("second second-stage `enable` event...");
-        post_event(&client, &headers, &second_stage_addr, &zeroing.target, true)
+        post_event(&client, &headers, &second_stage_addr, &enable_payload)
             .await
             .inspect(|_| metrics.rfi_zeroing.set_second(true))
             .inspect_err(

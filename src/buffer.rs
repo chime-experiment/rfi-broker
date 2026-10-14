@@ -21,7 +21,7 @@ use num_traits::Num;
 
 /// Constants managing how/when a partial frame should stop accumulating
 /// samples and get moved into the buffer
-const PARTIAL_FRAME_CAPACITY: usize = 8;
+const PARTIAL_FRAME_CAPACITY: usize = 32;
 const MIN_FRAME_SAMPLE_COUNT: u64 = 1;
 
 /// Single [`Buffer`] frame.
@@ -174,6 +174,15 @@ where
     /// Sends a frame to all subscribers and update the
     /// internal `last_frame`.
     fn push(&self, frame: Frame<T>) {
+        // log the case where the frame isn't full
+        if frame.sample_count != frame.max_sample_count {
+            tracing::debug!(
+                "pushed incomplete frame; sample count={:?}/{:?}",
+                frame.sample_count,
+                frame.max_sample_count
+            );
+        }
+
         let shared_frame = Arc::new(frame);
         // NB: there's a double write for the first frame received
         *self

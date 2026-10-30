@@ -13,8 +13,7 @@ use eyre::{OptionExt, WrapErr, bail, eyre};
 
 use serde_json::{Value, json};
 
-use crate::config::AppConfig;
-use crate::state::Metrics;
+use crate::state::{AppConfig, Metrics};
 
 /// Get the seconds until a future unix time.
 ///

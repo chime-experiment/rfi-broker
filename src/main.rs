@@ -15,10 +15,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 
 mod app;
 mod buffer;
-mod config;
-mod endpoints;
-mod metrics;
-mod packet;
+mod network;
 mod state;
 mod stats;
 mod tasks;
@@ -124,7 +121,7 @@ fn main() -> eyre::Result<()> {
         .config
         .as_ref()
         .and_then(|p| p.to_str())
-        .map(config::load)
+        .map(crate::state::config::load)
         // transpose calls swap the order of Option and Result, with the end effect
         // of propagating errors occuring in `load` to the parent function
         .transpose()

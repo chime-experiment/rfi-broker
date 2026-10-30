@@ -1,7 +1,4 @@
-//! Implements a global [`AppState`] and member states, including
-//! - [`Computed`] - computed/derived quantities
-//! - [`Metrics`] - application Prometheus metrics
-//! - [`Buffers`] - ringbuffers for each incoming dataset
+//! Implements global state objects.
 
 use core::sync::atomic::{AtomicU32, AtomicU64};
 use std::sync::{Arc, OnceLock};
@@ -11,9 +8,9 @@ use parking_lot::Mutex;
 
 use prometheus_client::registry::Registry;
 
+use super::metric_types::{LazyGaugeFamily, RFIZeroingTracker, SampleLossTracker};
 use crate::buffer::Buffer;
-use crate::metrics;
-use crate::packet::{Body, Header, Packet, packet_types};
+use crate::network::packet::{Body, Header, Packet, packet_types};
 use crate::stats;
 
 /// Bad input likelihood lookback num samples
@@ -39,27 +36,27 @@ pub struct Metrics {
     /// Prometheus metrics registry
     registry: Registry,
     /// Packet lost count tracker
-    pub packet_loss: metrics::SampleLossTracker,
+    pub packet_loss: SampleLossTracker,
     /// Current state of RFI zeroing, according to this broker
-    pub rfi_zeroing: metrics::RFIZeroingTracker,
+    pub rfi_zeroing: RFIZeroingTracker,
     /// Family of gauges storing the bad input likelihood. This stores the
     /// metric as a Prometheus family, and should only copy values from
     /// the actual computed metric
-    pub bad_input_likelihood: metrics::LazyGaugeFamily<f64, AtomicU64>,
+    pub bad_input_likelihood: LazyGaugeFamily<f64, AtomicU64>,
     /// Family of gauges storing fraction of flagged samples
-    pub frac_flagged: metrics::LazyGaugeFamily<f32, AtomicU32>,
+    pub frac_flagged: LazyGaugeFamily<f32, AtomicU32>,
     /// Family of gauges storing average SK
-    pub sktilde_avg: metrics::LazyGaugeFamily<f32, AtomicU32>,
+    pub sktilde_avg: LazyGaugeFamily<f32, AtomicU32>,
 }
 
 impl Default for Metrics {
     fn default() -> Self {
         // Initialize members
-        let packet_loss = metrics::SampleLossTracker::default();
-        let rfi_zeroing = metrics::RFIZeroingTracker::default();
-        let bad_input_likelihood = metrics::LazyGaugeFamily::<f64, AtomicU64>::new("feed_index");
-        let frac_flagged = metrics::LazyGaugeFamily::<f32, AtomicU32>::new("freq_id");
-        let sktilde_avg = metrics::LazyGaugeFamily::<f32, AtomicU32>::new("freq_id");
+        let packet_loss = SampleLossTracker::default();
+        let rfi_zeroing = RFIZeroingTracker::default();
+        let bad_input_likelihood = LazyGaugeFamily::<f64, AtomicU64>::new("feed_index");
+        let frac_flagged = LazyGaugeFamily::<f32, AtomicU32>::new("freq_id");
+        let sktilde_avg = LazyGaugeFamily::<f32, AtomicU32>::new("freq_id");
         let mut registry = Registry::default();
 
         // populate registry
@@ -227,7 +224,7 @@ pub struct AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::packet::tests::make_packets;
+    use crate::network::packet::tests::make_packets;
 
     /// Test that are successfully initialized when the first packet
     /// is pushed.

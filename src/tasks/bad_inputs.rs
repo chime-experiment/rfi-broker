@@ -7,6 +7,7 @@ use eyre::WrapErr;
 
 use ndarray::Ix2;
 
+use crate::core::stats::sk_fisher_chi2;
 use crate::state::{Buffers, Computed};
 
 /// Task to update the `bad_input_likelihood` metric every time a
@@ -42,7 +43,7 @@ pub async fn bad_input_task(buffers: Arc<Buffers>, computed: Arc<Computed>) -> e
         let k: u16 = frame.mask.iter().map(|&b| u16::from(b)).sum();
 
         // compute the likelihood that a given feed is bad
-        let Some(update_val) = crate::stats::sk_fisher_chi2::<f32>(&arr, f32::from(k))
+        let Some(update_val) = sk_fisher_chi2::<f32>(&arr, f32::from(k))
             .inspect_err(|err| tracing::error!(error = ?err, "failed to compute chi2"))
             .ok()
         else {

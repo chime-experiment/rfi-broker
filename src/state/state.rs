@@ -9,9 +9,8 @@ use parking_lot::Mutex;
 use prometheus_client::registry::Registry;
 
 use super::metric_types::{LazyGaugeFamily, RFIZeroingTracker, SampleLossTracker};
-use crate::buffer::Buffer;
+use crate::core::{buffer::Buffer, stats};
 use crate::network::packet::{Body, Header, Packet, packet_types};
-use crate::stats;
 
 /// Bad input likelihood lookback num samples
 const BAD_INPUT_LIKELIHOOD_LOOKBACK: u16 = 128;

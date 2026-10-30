@@ -14,10 +14,9 @@ use eyre::{WrapErr, eyre};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod app;
-mod buffer;
+mod core;
 mod network;
 mod state;
-mod stats;
 mod tasks;
 
 #[global_allocator]

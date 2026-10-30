@@ -62,7 +62,10 @@ pub async fn packet_handler_task(
 
     loop {
         tokio::select! {
-            biased; // always poll the socket first
+            // always poll the socket first. Works here because the other case only triggers
+            // if the socket has not received data for `DATA_STATE_FLUSH_TIMEOUT_SECONDS`, so
+            // we don't have to worry about starving it.
+            biased;
             // Wait until socket is readable. Making this asynchronous mean that this thread
             // will be released each time it drains the os buffer. This ends up being less
             // performant than having a permanent thread always listening, but the effect

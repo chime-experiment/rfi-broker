@@ -10,7 +10,7 @@
 //! - ``last-frame``: Pretty print of most recent buffer frame
 //! - ``write-buffers``: POST with `path` + `nsamples` to accumulate and write SK buffers
 
-pub mod endpoints;
+mod endpoints;
 pub mod packet;
 pub mod router;
 pub mod udp;

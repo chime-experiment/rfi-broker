@@ -41,7 +41,7 @@ pub async fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Erro
     Ok(socket)
 }
 
-/// Drains a UDP socket buffer and pushes packets to the [`Buffers`].
+/// Drains a UDP socket buffer and pushes packets to the [`crate::state::Buffers`].
 ///
 /// Runs indefinitely - intended to be run with [`tokio::spawn`].
 pub async fn packet_handler_task(

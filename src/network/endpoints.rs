@@ -1,7 +1,7 @@
 //! Axum endpoints and associated functions.
 #[cfg(debug_assertions)]
 use {
-    crate::buffer::{stack_buffer_array, stack_buffer_mask},
+    crate::core::buffer::{stack_buffer_array, stack_buffer_mask},
     ndarray::Axis,
     ndarray_npy::write_npy,
     serde::Deserialize,

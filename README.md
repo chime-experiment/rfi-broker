@@ -35,6 +35,23 @@ The following profiles are included:
 - `release-with-debug-info`
 - `release`
 
+# Development
+## Tools
+
+This project uses [just](https://github.com/casey/just) as a command runner, which
+doubles as a library of recipes for building, linting, etc...
+
+List all available commands:
+```bash
+just
+```
+
+## Tests
+The test suite uses [nextest](https://nexte.st/) and can be run using
+```
+$ just test
+```
+
 # Running
 ```
 $ [RUST_LOG=<log_level>] ./path/to/binary --addr <http address> --udp_addr <udp recv address> [--config <path to config>] [--threads <num threads>]
@@ -63,17 +80,6 @@ The following endpoints are exposed in all build profiles:
 ### Debug-only
 - `/last-frame`: prints the most recent frame in each buffer, plus frame shape
 - `/write-buffers`: POST - accumulates `nsamples` frames from both spectral kurtosis buffers and writes arrays/masks to a provided directory
-
-# Tests
-Unit tests can be run using
-```
-$ cargo test
-```
-or
-```
-$ cargo nextest run
-```
-if using [nextest](https://nexte.st/). Integration testing is a WIP.
 
 # Metrics
 ## Bad Input Likelihood

@@ -14,7 +14,7 @@ const TX_BUFFER_CAPACITY: usize = 32;
 /// Store for application data buffers.
 ///
 /// Datasets are application specific, and matches those expected
-/// in [`crate::packet::Packet`].
+/// in [`crate::network::packet::Packet`].
 ///
 /// Buffers are created lazily - only instantiated when a packet is
 /// received and parsed. This is implemented via a ``OnceLock``.

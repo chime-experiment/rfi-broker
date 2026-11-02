@@ -5,10 +5,24 @@
 //! - [`Metrics`] - application Prometheus metrics
 //! - [`Buffers`] - ringbuffers for each incoming dataset
 
+mod buffers;
 pub mod config;
-mod metric_types;
-#[allow(clippy::module_inception, reason = "Not a public module")]
-mod state;
+mod metrics;
 
+pub use buffers::Buffers;
 pub use config::AppConfig;
-pub use state::{AppState, Buffers, Computed, Metrics};
+pub use metrics::{Computed, Metrics};
+
+/// Shared application state.
+///
+/// Intended to be wrapped with an [`Arc`] for use with
+/// [`tokio`] and [`axum`].
+#[derive(Default, Clone)]
+pub struct AppState {
+    /// Application metrics
+    pub metrics: std::sync::Arc<Metrics>,
+    /// Computed quantities,
+    pub computed: std::sync::Arc<Computed>,
+    /// Application buffers
+    pub buffers: std::sync::Arc<Buffers>,
+}

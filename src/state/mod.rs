@@ -15,7 +15,7 @@ pub use metrics::{Computed, Metrics};
 
 /// Shared application state.
 ///
-/// Intended to be wrapped with an [`Arc`] for use with
+/// Intended to be wrapped with [`std::sync::Arc`] for use with
 /// [`tokio`] and [`axum`].
 #[derive(Default, Clone)]
 pub struct AppState {

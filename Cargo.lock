@@ -1504,7 +1504,7 @@ dependencies = [
 
 [[package]]
 name = "rfi-broker"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "approx",
  "axum",

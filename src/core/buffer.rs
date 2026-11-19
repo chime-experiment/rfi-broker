@@ -4,7 +4,6 @@
 //! a mismatched shape are dropped on push.
 
 use parking_lot::{Mutex, RwLock};
-use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
 use tokio::sync::broadcast;
@@ -21,8 +20,26 @@ use num_traits::Num;
 
 /// Constants managing how/when a partial frame should stop accumulating
 /// samples and get moved into the buffer
-const PARTIAL_FRAME_BUFFER_CAPACITY: usize = 64;
+const PARTIAL_FRAME_BUFFER_CAPACITY: usize = 128;
 const MIN_FRAME_SAMPLE_COUNT: u64 = 1;
+
+/// Buffer slot containing a partial [`Frame`]
+#[derive(Debug)]
+struct Slot<T> {
+    /// Current sequency ID occupying this slot
+    id: Option<u64>,
+    /// Current [`Frame`] in this slow
+    frame: Option<Frame<T>>, //
+}
+
+impl<T> Slot<T> {
+    const fn empty() -> Self {
+        Self {
+            id: None,
+            frame: None,
+        }
+    }
+}
 
 /// Single [`Buffer`] frame.
 ///
@@ -133,7 +150,9 @@ pub struct Buffer<T, const N: usize> {
     /// Expected shape of each frame
     frame_shape: Vec<usize>,
     /// Store partial frames
-    partial_frames: Mutex<BTreeMap<u64, Frame<T>>>,
+    slots: Box<[Mutex<Slot<T>>]>,
+    id_stride: usize,
+    // partial_frames: Mutex<BTreeMap<u64, Frame<T>>>,
     /// Holds the most recent frame for quick access
     last_frame: OnceLock<RwLock<SharedFrame<T>>>,
     /// broadcast sender for new frame events
@@ -145,11 +164,17 @@ where
     T: Num + Clone,
 {
     /// Create a new buffer with a fixed shape.
-    pub fn new(frame_shape: Vec<usize>) -> Self {
+    pub fn new(frame_shape: Vec<usize>, id_stride: usize) -> Self {
         let (tx, _) = broadcast::channel(N);
+
+        let slots: Box<[Mutex<Slot<T>>]> = (0..PARTIAL_FRAME_BUFFER_CAPACITY)
+            .map(|_| Mutex::new(Slot::empty()))
+            .collect();
+
         Self {
             frame_shape,
-            partial_frames: Mutex::new(BTreeMap::<u64, Frame<T>>::new()),
+            slots,
+            id_stride,
             last_frame: OnceLock::<RwLock<SharedFrame<T>>>::default(),
             tx,
         }
@@ -203,16 +228,18 @@ where
 
     /// Push all partial frames to subscribers.
     pub fn flush(&self) -> usize {
-        // Need to hold this guard throughout
-        let mut guard = self.partial_frames.lock();
+        let mut num_sent: usize = 0;
 
-        let num_frames = guard.len();
+        for slot in &self.slots {
+            let taken = slot.lock().frame.take();
 
-        while let Some((_, frame)) = guard.pop_first() {
-            self.send_frame(frame);
+            if let Some(f) = taken {
+                self.send_frame(f);
+                num_sent += 1;
+            }
         }
 
-        num_frames
+        num_sent
     }
 
     /// Add an array to a frame and push the frame if it is full.
@@ -234,63 +261,67 @@ where
         axis: usize,
     ) -> eyre::Result<u64> {
         let key: u64 = sequence_id.into();
-        // Want to hold this lock throughout this whole op
-        let mut guard = self.partial_frames.lock();
+        #[allow(
+            clippy::integer_division,
+            clippy::cast_possible_truncation,
+            reason = "integer values too small for truncation"
+        )]
+        let slot_index = (key as usize / self.id_stride) % PARTIAL_FRAME_BUFFER_CAPACITY;
 
-        if !guard.contains_key(&key) {
-            // `id` should be monotonically increasing, so drop sample
-            // if it's too old
-            if let Some((&oldest_id, _)) = guard.first_key_value()
-                && key < oldest_id
-            {
-                bail!(
-                    "Tried to push data with id {key} older than the \
-                    oldest available entry id {oldest_id}"
-                );
-            }
-            // Create a new frame and insert it
-            let new_frame: Frame<T> = Frame::new(key, &self.frame_shape, axis)?;
-            // Evict the oldest frame and push to the buffer if it seems to
-            // have received a reasonable number of samples
-            if guard.len() == PARTIAL_FRAME_BUFFER_CAPACITY {
-                let (_, frame) = guard
-                    .pop_first()
-                    .ok_or_eyre("unexpected failure extracting partial frame")?;
-                // Only push frames with a minimum sample count
-                if frame.sample_count >= MIN_FRAME_SAMPLE_COUNT {
-                    tracing::debug!(
-                        "Pushing frame with sequence number {}. Guard length is {}",
-                        frame.sequence_id,
-                        guard.len()
-                    );
-                    self.send_frame(frame);
-                } else {
-                    tracing::debug!(
-                        "Dropped frame with sequence number {} because sample count {} is below \
-                        threshold {MIN_FRAME_SAMPLE_COUNT}",
-                        frame.sequence_id,
-                        frame.sample_count,
-                    );
+        let mut evicted: Option<Frame<T>> = None;
+
+        let result: eyre::Result<Option<Frame<T>>> = (|| {
+            let mut slot = self
+                .slots
+                .get(slot_index)
+                .ok_or_eyre("unexpected failure accessing slow {slot_index}")?
+                .lock();
+
+            match slot.id {
+                // `id` should be monotonically increasing, so drop the sample
+                // if it's too old
+                Some(id) if key < id => {
+                    bail!("tried to push data with id {key} older than the slot's current id {id}")
+                }
+                Some(id) if key == id => {
+                    if slot.frame.is_none() {
+                        // another thread got here first
+                        bail!("frame {key} was already completed!");
+                    }
+                }
+                _ => {
+                    // make a new frame and insert it
+                    let new_frame = Frame::new(key, &self.frame_shape, axis)?;
+                    evicted = slot.frame.replace(new_frame);
+                    slot.id = Some(key);
                 }
             }
-            guard.insert(key, new_frame);
+
+            let frame = slot
+                .frame
+                .as_mut()
+                .ok_or_eyre("unexpected failure extracting partial frame")?;
+
+            let ready = frame.insert_chunk(indices, &array.view())?;
+
+            Ok(if ready { slot.frame.take() } else { None })
+        })();
+
+        if let Some(old) = evicted {
+            if old.sample_count >= MIN_FRAME_SAMPLE_COUNT {
+                self.send_frame(old);
+            } else {
+                tracing::debug!(
+                    "Dropped frame with sequence number {} because sample count {} is below \
+                    threshold {MIN_FRAME_SAMPLE_COUNT}",
+                    old.sequence_id,
+                    old.sample_count,
+                );
+            }
         }
 
-        let frame: &mut Frame<T> = guard.get_mut(&key).ok_or_else(|| {
-            eyre!("unexpected failure getting key {key}, which is expected to exist")
-        })?;
-
-        // Push data to the frame
-        let frame_ready: bool = frame.insert_chunk(indices, &array.view())?;
-
-        // Remove the frame from the partial map and push
-        // to the ringbuffer
-        if frame_ready {
-            let filled_frame: Frame<T> = guard.remove(&key).ok_or_else(|| {
-                eyre!("unexpected failure getting key {key}, which is expected to exist")
-            })?;
-
-            self.send_frame(filled_frame);
+        if let Some(full) = result? {
+            self.send_frame(full);
         }
 
         Ok(key)
@@ -426,7 +457,7 @@ mod tests {
     async fn test_subscribe() -> Result<(), Box<dyn std::error::Error>> {
         let frame_shape = vec![3, 12];
         // Create a new empty buffer
-        let buf = Buffer::<f32, 4>::new(frame_shape);
+        let buf = Buffer::<f32, 4>::new(frame_shape, 1);
         // Subscribe to the buffer for new frame events
         let mut rx1 = buf.subscribe();
         let mut rx2 = buf.subscribe();
@@ -461,7 +492,7 @@ mod tests {
     async fn test_accumulate() -> Result<(), Box<dyn std::error::Error>> {
         let frame_shape = vec![3, 12];
         //i Create a new buffer. Wrap in an Arc so we can pass to the receive task
-        let buf = Arc::new(Buffer::<f32, 4>::new(frame_shape));
+        let buf = Arc::new(Buffer::<f32, 4>::new(frame_shape, 1));
         // create an array to push
         let arr = ArrayD::<f32>::from_shape_fn(IxDyn(&[2, 12]), |idx| idx[1] as f32);
         // create an array to compare with, since there's an extra row

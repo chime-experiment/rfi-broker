@@ -21,7 +21,7 @@ use num_traits::Num;
 
 /// Constants managing how/when a partial frame should stop accumulating
 /// samples and get moved into the buffer
-const PARTIAL_FRAME_CAPACITY: usize = 64;
+const PARTIAL_FRAME_BUFFER_CAPACITY: usize = 64;
 const MIN_FRAME_SAMPLE_COUNT: u64 = 1;
 
 /// Single [`Buffer`] frame.
@@ -252,12 +252,17 @@ where
             let new_frame: Frame<T> = Frame::new(key, &self.frame_shape, axis)?;
             // Evict the oldest frame and push to the buffer if it seems to
             // have received a reasonable number of samples
-            if guard.len() == PARTIAL_FRAME_CAPACITY {
+            if guard.len() == PARTIAL_FRAME_BUFFER_CAPACITY {
                 let (_, frame) = guard
                     .pop_first()
                     .ok_or_eyre("unexpected failure extracting partial frame")?;
                 // Only push frames with a minimum sample count
                 if frame.sample_count >= MIN_FRAME_SAMPLE_COUNT {
+                    tracing::debug!(
+                        "Pushing frame with sequence number {}. Guard length is {}",
+                        frame.sequence_id,
+                        guard.len()
+                    );
                     self.push(frame);
                 } else {
                     tracing::debug!(

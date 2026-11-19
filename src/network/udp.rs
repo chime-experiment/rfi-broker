@@ -89,7 +89,7 @@ pub async fn packet_handler_task(
                         // something happened - log it and move on
                         Err(e) => {
                             metrics.packet_loss.inc_lost();
-                            tracing::debug!(error = ?e, "UDP recv error:");
+                            tracing::warn!(error = ?e, "UDP recv error:");
                             None
                         }
                     };

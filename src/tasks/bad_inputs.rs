@@ -51,12 +51,7 @@ pub async fn bad_input_task(buffers: Arc<Buffers>, computed: Arc<Computed>) -> e
         let k: u16 = frame.mask.iter().map(|&b| u16::from(b)).sum();
 
         // compute the likelihood that a given feed is bad
-        let Some(update_val) = sk_fisher_chi2::<f32>(&arr, f32::from(k))
-            .inspect_err(|err| tracing::error!(error = ?err, "failed to compute chi2"))
-            .ok()
-        else {
-            continue;
-        };
+        let update_val = sk_fisher_chi2::<f32>(&arr, f32::from(k));
 
         // Update the exponentially-weighted moving average
         if let Some(sl) = update_val.as_slice() {

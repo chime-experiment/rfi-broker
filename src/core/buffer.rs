@@ -21,7 +21,7 @@ use num_traits::Num;
 
 /// Constants managing how/when a partial frame should stop accumulating
 /// samples and get moved into the buffer
-const PARTIAL_FRAME_CAPACITY: usize = 32;
+const PARTIAL_FRAME_CAPACITY: usize = 512;
 const MIN_FRAME_SAMPLE_COUNT: u64 = 1;
 
 /// Single [`Buffer`] frame.

@@ -173,7 +173,7 @@ where
 
     /// Sends a frame to all subscribers and update the
     /// internal `last_frame`.
-    fn push(&self, frame: Frame<T>) {
+    fn send_frame(&self, frame: Frame<T>) {
         // log the case where the frame isn't full
         if frame.sample_count != frame.max_sample_count {
             tracing::debug!(
@@ -209,7 +209,7 @@ where
         let num_frames = guard.len();
 
         while let Some((_, frame)) = guard.pop_first() {
-            self.push(frame);
+            self.send_frame(frame);
         }
 
         num_frames
@@ -263,7 +263,7 @@ where
                         frame.sequence_id,
                         guard.len()
                     );
-                    self.push(frame);
+                    self.send_frame(frame);
                 } else {
                     tracing::debug!(
                         "Dropped frame with sequence number {} because sample count {} is below \
@@ -290,7 +290,7 @@ where
                 eyre!("unexpected failure getting key {key}, which is expected to exist")
             })?;
 
-            self.push(filled_frame);
+            self.send_frame(filled_frame);
         }
 
         Ok(key)

@@ -3,9 +3,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use eyre::WrapErr;
+use tokio::sync::broadcast::error::RecvError;
 
 use ndarray::Ix2;
+
+use eyre::bail;
 
 use crate::core::stats::sk_fisher_chi2;
 use crate::state::{Buffers, Computed};
@@ -24,10 +26,16 @@ pub async fn bad_input_task(buffers: Arc<Buffers>, computed: Arc<Computed>) -> e
 
     // Wait for new data frames to arrive and handle accordingly
     loop {
-        let frame = event_rx
-            .recv()
-            .await
-            .wrap_err("error receiving new frame event")?;
+        let frame = match event_rx.recv().await {
+            Ok(frame) => frame,
+            Err(RecvError::Lagged(skipped)) => {
+                tracing::debug!("receive buffer overflowed = {skipped} frames were missed");
+                continue;
+            }
+            Err(RecvError::Closed) => {
+                bail!("frame sender connection closed!");
+            }
+        };
 
         // Convert the dynamically-sized array into a 2D array, which should be
         // guaranteed to succeed

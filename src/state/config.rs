@@ -30,6 +30,7 @@ pub struct RFIZeroingConfig {
 pub struct AppConfig {
     pub telescope: Option<TelescopeCoordinates>,
     pub zeroing: Option<RFIZeroingConfig>,
+    pub num_receivers: Option<usize>,
 }
 
 /// Load a [`AppConfig`] from a toml file.

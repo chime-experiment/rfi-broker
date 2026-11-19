@@ -5,7 +5,7 @@ use eyre::WrapErr;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, task::JoinSet};
 
 use crate::network::{
     router::make_router,
@@ -13,6 +13,8 @@ use crate::network::{
 };
 use crate::state::AppConfig;
 use crate::state::AppState;
+
+const DEFAULT_NUM_RECEIVERS: usize = 2;
 
 /// Spawns all program tasks, including:
 /// - rfi solar enable/disable task
@@ -31,6 +33,11 @@ pub async fn run(
     let state = AppState::default();
     let config: Option<Arc<AppConfig>> = config.map(Arc::new);
 
+    let nrecv: usize = config
+        .as_ref()
+        .and_then(|cfg| cfg.num_receivers)
+        .unwrap_or(DEFAULT_NUM_RECEIVERS);
+
     // Start the solar event task
     let rfi_zeroing = tokio::spawn(crate::tasks::solar_event_task(
         Arc::clone(&state.metrics),
@@ -45,13 +52,17 @@ pub async fn run(
 
     // Construct the socket and start the packet handling task. If this becomes
     // a bottleneck, it could be run in multiple threads
-    let udp_sock = construct_sock(udp_addr).await?;
+    let udp_sock = Arc::new(construct_sock(udp_addr).await?);
 
-    let packet_handler = tokio::spawn(packet_handler_task(
-        udp_sock,
-        Arc::clone(&state.buffers),
-        Arc::clone(&state.metrics),
-    ));
+    // Spawn multiple listeners
+    let mut rx_tasks: JoinSet<(usize, Result<(), std::io::Error>)> = JoinSet::new();
+
+    for i in 0..nrecv {
+        let sock = Arc::clone(&udp_sock);
+        let buffers = Arc::clone(&state.buffers);
+        let metrics = Arc::clone(&state.metrics);
+        rx_tasks.spawn(async move { (i, packet_handler_task(sock, buffers, metrics).await) });
+    }
 
     let http_listener = TcpListener::bind(http_addr).await?;
 
@@ -59,7 +70,12 @@ pub async fn run(
     tracing::info!(http_addr = ?http_addr, "started HTTP server");
 
     tokio::select! {
-        result = packet_handler => result?.wrap_err("packet handler failed"),
+        Some(result) = rx_tasks.join_next() => match result {
+            Ok((i, Ok(()))) => eyre::bail!("packet handler {i} exited unexpectedly!"),
+            Ok((i, Err(e))) => eyre::bail!("packet handler {i} failed: {e}"),
+            Err(join_err) => eyre::bail!("packet handler panicked or was cancelled: {join_err}")
+        },
+        // result = packet_handler => result?.wrap_err("packet handler failed"),
         result = http => result?.wrap_err("http server failed"),
         result = rfi_zeroing => result?.wrap_err("solar zeroing task failed"),
         result = bad_inputs => result?.wrap_err("bad input metric task failed"),

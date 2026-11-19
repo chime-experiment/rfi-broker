@@ -45,7 +45,7 @@ pub async fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Erro
 ///
 /// Runs indefinitely - intended to be run with [`tokio::spawn`].
 pub async fn packet_handler_task(
-    sock: UdpSocket,
+    sock: Arc<UdpSocket>,
     buffers: Arc<crate::state::Buffers>,
     metrics: Arc<crate::state::Metrics>,
 ) -> Result<(), std::io::Error> {

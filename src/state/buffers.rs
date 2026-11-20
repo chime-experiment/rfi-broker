@@ -39,6 +39,9 @@ impl Buffers {
         let body: Body = packet.body;
         let header: Header = packet.header;
 
+        // Construct and check the sample stride
+        let id_stride = (header.samples_per_data_set * header.frames_per_packet) as usize;
+
         // Check that the metadata is as-expected and initialize otherwise
         self.metadata
             .get_or_init(|| Mutex::new(header))
@@ -55,7 +58,7 @@ impl Buffers {
             .get_or_init(|| {
                 Buffer::<packet_types::FracFlaggedType, TX_BUFFER_CAPACITY>::new(
                     vec![header.num_total_freq as usize],
-                    header.samples_per_data_set as usize,
+                    id_stride,
                 )
             })
             .push_vec(body.frac_flagged, id, &indices, axis)?;
@@ -64,7 +67,7 @@ impl Buffers {
             .get_or_init(|| {
                 Buffer::<packet_types::SkType, TX_BUFFER_CAPACITY>::new(
                     vec![header.num_total_freq as usize],
-                    header.samples_per_data_set as usize,
+                    id_stride,
                 )
             })
             .push_vec(body.sktilde_avg, id, &indices, axis)?;
@@ -73,7 +76,7 @@ impl Buffers {
             .get_or_init(|| {
                 Buffer::<packet_types::SkType, TX_BUFFER_CAPACITY>::new(
                     vec![header.num_total_freq as usize, header.num_elements as usize],
-                    header.samples_per_data_set as usize,
+                    id_stride,
                 )
             })
             .push_vec(body.skbar_avg, id, &indices, axis)?;

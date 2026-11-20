@@ -36,7 +36,8 @@ pub async fn run(
     let nrecv: usize = config
         .as_ref()
         .and_then(|cfg| cfg.num_receivers)
-        .unwrap_or(DEFAULT_NUM_RECEIVERS);
+        .unwrap_or(DEFAULT_NUM_RECEIVERS)
+        .max(1);
 
     // Start the solar event task
     let rfi_zeroing = tokio::spawn(crate::tasks::solar_event_task(

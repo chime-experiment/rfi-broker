@@ -42,7 +42,7 @@ pub async fn bad_input_task(buffers: Arc<Buffers>, computed: Arc<Computed>) -> e
         let Some(arr) = frame.array
             .view()
             .into_dimensionality::<Ix2>()
-            .inspect_err(|err| tracing::error!(error = ?err, "failed to cast expected 2D array into 2 dimensions"))
+            .inspect_err(|err| tracing::error!(error = ?err, "failed to cast expected 2D array into 2 dimensions: {err}"))
             .ok()
         else {
             continue
@@ -59,7 +59,7 @@ pub async fn bad_input_task(buffers: Arc<Buffers>, computed: Arc<Computed>) -> e
                 .bad_input_likelihood
                 .update(sl)
                 .inspect_err(
-                    |err| tracing::warn!(error = ?err, "failed to update bad input metric"),
+                    |err| tracing::warn!(error = ?err, "failed to update bad input metric: {err}"),
                 )
                 .ok();
         } else {

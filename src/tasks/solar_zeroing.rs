@@ -131,7 +131,7 @@ pub async fn solar_event_task(
     tracing::info!(
         telescope = ?telescope,
         zeroing = ?zeroing,
-        "solar RFI zeroing task started",
+        "solar RFI zeroing task started. telescope={telescope:?}, zeroing={zeroing:?}",
     );
     // Construct the addresses
     let first_stage_addr = format!("{}/{}", zeroing.url, zeroing.first_stage_endpoint);
@@ -195,7 +195,7 @@ pub async fn solar_event_task(
                 .await
                 .inspect(|_| metrics.rfi_zeroing.set_second(false))
                 .inspect_err(
-                    |err| tracing::warn!(error = ?err, "failed to disable second-stage zeroing"),
+                    |err| tracing::warn!(error = ?err, "failed to disable second-stage zeroing: {err}"),
                 )
                 .ok();
 
@@ -208,7 +208,7 @@ pub async fn solar_event_task(
                 .await
                 .inspect(|_| metrics.rfi_zeroing.set_first(false))
                 .inspect_err(
-                    |err| tracing::warn!(error = ?err, "failed to disable first-stage zeroing"),
+                    |err| tracing::warn!(error = ?err, "failed to disable first-stage zeroing: {err}"),
                 )
                 .ok();
         }
@@ -234,7 +234,9 @@ pub async fn solar_event_task(
         post_event(&client, &headers, &first_stage_addr, &enable_payload)
             .await
             .inspect(|_| metrics.rfi_zeroing.set_first(true))
-            .inspect_err(|err| tracing::warn!(error = ?err, "failed to enable first-stage zeroing"))
+            .inspect_err(
+                |err| tracing::warn!(error = ?err, "failed to enable first-stage zeroing: {err}"),
+            )
             .ok();
 
         tracing::debug!(
@@ -246,7 +248,7 @@ pub async fn solar_event_task(
             .await
             .inspect(|_| metrics.rfi_zeroing.set_second(true))
             .inspect_err(
-                |err| tracing::warn!(error = ?err, "failed to enable second-stage zeroing"),
+                |err| tracing::warn!(error = ?err, "failed to enable second-stage zeroing: {err}"),
             )
             .ok();
 

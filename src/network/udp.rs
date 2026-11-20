@@ -38,7 +38,7 @@ pub async fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Erro
         udp_addr = ?addr,
         requested_MB = ?UDP_BUF_SIZE_MB,
         actual_MB = ?actual,
-        "created UDP socket",
+        "created UDP socket {addr}. Requested {UDP_BUF_SIZE_MB} MB, actual {actual} MB",
     );
 
     Ok(socket)
@@ -131,7 +131,7 @@ pub async fn packet_handler_task(
                 // something happened - log it and move on
                 Err(e) => {
                     metrics.packet_loss.inc_lost();
-                    tracing::warn!(error = ?e, "UDP recv error:");
+                    tracing::warn!(error = ?e, "UDP recv error: {e}");
                     continue;
                 }
             };
@@ -146,7 +146,7 @@ pub async fn packet_handler_task(
                     // push failed - log it and move on
                     |e| {
                         metrics.packet_loss.inc_lost();
-                        tracing::warn!(error = ?e, "error handling received packet:");
+                        tracing::warn!(error = ?e, "error handling received packet: {e}");
                     },
                     |_| metrics.packet_loss.inc_recv(),
                 );

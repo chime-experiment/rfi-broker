@@ -75,7 +75,7 @@ pub async fn run(
     let http_listener = TcpListener::bind(http_addr).await?;
 
     let http = tokio::spawn(axum::serve(http_listener, make_router(state)).into_future());
-    tracing::info!(http_addr = ?http_addr, "started HTTP server");
+    tracing::info!(http_addr = ?http_addr, "started HTTP server: {http_addr}");
 
     tokio::select! {
         Some(result) = rx_tasks.join_next() => match result {

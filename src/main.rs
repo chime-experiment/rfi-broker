@@ -22,6 +22,8 @@ mod tasks;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+const DEFAULT_NUM_RECEIVERS: usize = 1;
+
 /// Command-line parser
 #[derive(Parser)]
 #[command(name = "RFI Receiver")]
@@ -42,6 +44,10 @@ struct Cli {
     /// Number of worker threads
     #[arg(short, long, default_value_t = default_nthreads())]
     pub threads: usize,
+
+    /// Number of receiver threads
+    #[arg(short, long, default_value_t = DEFAULT_NUM_RECEIVERS)]
+    pub receivers: usize,
 }
 
 /// Returns the default number of work threads: the larger of
@@ -133,7 +139,7 @@ fn main() -> eyre::Result<()> {
         .enable_all()
         .build()
         .wrap_err("failed to build async runtime")?
-        .block_on(app::run(cli.addr, cli.udp_addr, config))
+        .block_on(app::run(cli.addr, cli.udp_addr, config, cli.receivers))
         .wrap_err("server failed")?;
 
     Ok(())

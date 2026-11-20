@@ -14,8 +14,6 @@ use crate::network::{
 use crate::state::AppConfig;
 use crate::state::AppState;
 
-const DEFAULT_NUM_RECEIVERS: usize = 2;
-
 /// Spawns all program tasks, including:
 /// - rfi solar enable/disable task
 /// - bad input metric computation task
@@ -29,15 +27,10 @@ pub async fn run(
     http_addr: SocketAddr,
     udp_addr: SocketAddr,
     config: Option<AppConfig>,
+    receiver_threads: usize,
 ) -> eyre::Result<()> {
     let state = AppState::default();
     let config: Option<Arc<AppConfig>> = config.map(Arc::new);
-
-    let nrecv: usize = config
-        .as_ref()
-        .and_then(|cfg| cfg.num_receivers)
-        .unwrap_or(DEFAULT_NUM_RECEIVERS)
-        .max(1);
 
     // Start the solar event task
     let rfi_zeroing = tokio::spawn(crate::tasks::solar_event_task(
@@ -58,7 +51,7 @@ pub async fn run(
     // Spawn multiple listeners
     let mut rx_tasks: JoinSet<(usize, Result<(), std::io::Error>)> = JoinSet::new();
 
-    for i in 0..nrecv {
+    for i in 0..receiver_threads {
         let sock = Arc::clone(&udp_sock);
         let buffers = Arc::clone(&state.buffers);
         let metrics = Arc::clone(&state.metrics);
@@ -76,7 +69,6 @@ pub async fn run(
             Ok((i, Err(e))) => eyre::bail!("packet handler {i} failed: {e}"),
             Err(join_err) => eyre::bail!("packet handler panicked or was cancelled: {join_err}")
         },
-        // result = packet_handler => result?.wrap_err("packet handler failed"),
         result = http => result?.wrap_err("http server failed"),
         result = rfi_zeroing => result?.wrap_err("solar zeroing task failed"),
         result = bad_inputs => result?.wrap_err("bad input metric task failed"),

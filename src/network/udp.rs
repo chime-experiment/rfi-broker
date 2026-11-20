@@ -1,12 +1,15 @@
 //! UDP socket and packet parsing.
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use std::io::ErrorKind::WouldBlock;
 use std::net::SocketAddr;
 
 use tokio::net::UdpSocket;
-use tokio::time::{Duration, Instant, sleep_until};
+use tokio::time::{Duration, Instant, sleep};
 
 use super::packet::Packet;
 
@@ -41,11 +44,62 @@ pub async fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Erro
     Ok(socket)
 }
 
+/// Tracks the duration since some sort of activity
+pub struct NetworkActivity {
+    start: Instant,
+    last_ns: AtomicU64,
+}
+
+impl NetworkActivity {
+    pub fn new() -> Self {
+        Self {
+            start: Instant::now(),
+            last_ns: AtomicU64::new(0),
+        }
+    }
+    pub fn touch(&self) -> eyre::Result<()> {
+        let now = u64::try_from(self.start.elapsed().as_nanos())?;
+        self.last_ns.fetch_max(now, Ordering::Relaxed); // never moves backwards
+        Ok(())
+    }
+    pub fn idle_for(&self) -> eyre::Result<Duration> {
+        let now = u64::try_from(self.start.elapsed().as_nanos())?;
+        Ok(Duration::from_nanos(
+            now.saturating_sub(self.last_ns.load(Ordering::Relaxed)),
+        ))
+    }
+}
+
+/// Tracks activity on consumer network receive tasks, and flushes state buffers
+/// after a period of inactivity.
+///
+/// Runs indefinitely - intended to be run with [`tokio::spawn`].
+pub async fn packet_monitor_task(
+    buffers: Arc<crate::state::Buffers>,
+    activity: Arc<NetworkActivity>,
+) -> eyre::Result<()> {
+    let timeout = Duration::from_secs(DATA_STATE_FLUSH_TIMEOUT_SECONDS);
+
+    loop {
+        let idle = activity.idle_for()?;
+        let wait = if idle >= timeout {
+            // no worker has seen a packet
+            buffers.flush();
+            timeout
+        } else {
+            timeout.checked_sub(idle).unwrap_or(Duration::from_secs(0))
+        };
+
+        sleep(wait).await;
+    }
+}
+
 /// Drains a UDP socket buffer and pushes packets to the [`crate::state::Buffers`].
 ///
 /// Runs indefinitely - intended to be run with [`tokio::spawn`].
 pub async fn packet_handler_task(
     sock: Arc<UdpSocket>,
+    activity: Arc<NetworkActivity>,
     buffers: Arc<crate::state::Buffers>,
     metrics: Arc<crate::state::Metrics>,
 ) -> Result<(), std::io::Error> {
@@ -54,84 +108,48 @@ pub async fn packet_handler_task(
     // Allocate a buffer large enough for any valid UDP packet
     let mut buf = vec![0u8; u16::MAX as usize];
 
-    // Record how long it's been since the last packet was received
-    let flush_timeout = Duration::from_secs(DATA_STATE_FLUSH_TIMEOUT_SECONDS);
-    let flush_timer = sleep_until(Instant::now() + flush_timeout);
-
-    tokio::pin!(flush_timer);
-
     loop {
-        tokio::select! {
-            // always poll the socket first. Works here because the other case only triggers
-            // if the socket has not received data for `DATA_STATE_FLUSH_TIMEOUT_SECONDS`, so
-            // we don't have to worry about starving it.
-            biased;
-            // Wait until socket is readable. Making this asynchronous mean that this thread
-            // will be released each time it drains the os buffer. This ends up being less
-            // performant than having a permanent thread always listening, but the effect
-            // is negligible for the amount of data that we're receiving. If we ever end up
-            // wanting higher throughput, this should probably just become a fixed thread.
-            result = sock.readable() => {
-                result?;
+        // Wait until socket is readable. Making this asynchronous mean that this thread
+        // will be released each time it drains the os buffer. This ends up being less
+        // performant than having a permanent thread always listening, but the effect
+        // is negligible for the amount of data that we're receiving. If we ever end up
+        // wanting higher throughput, this should probably just become a fixed thread.
+        sock.readable().await?;
 
-                if log_packet_recv {
-                    tracing::info!("started receiving packets");
-                    log_packet_recv = false;
+        if log_packet_recv {
+            tracing::info!("started receiving packets");
+            log_packet_recv = false;
+        }
+
+        // drain the entire OS buffer
+        loop {
+            // try to read a packet, breaking the inner loop if the
+            // os buffer is empty
+            let nbytes = match sock.try_recv_from(&mut buf) {
+                Ok((nbytes, _)) => nbytes,
+                Err(ref e) if e.kind() == WouldBlock => break,
+                // something happened - log it and move on
+                Err(e) => {
+                    metrics.packet_loss.inc_lost();
+                    tracing::warn!(error = ?e, "UDP recv error:");
+                    continue;
                 }
+            };
 
-                // drain the entire OS buffer
-                loop {
-                    // try to read a packet, breaking the inner loop if the
-                    // os buffer is empty
-                    let nbytes = match sock.try_recv_from(&mut buf) {
-                        Ok((nbytes, _)) => Some(nbytes),
-                        Err(ref e) if e.kind() == WouldBlock => break,
-                        // something happened - log it and move on
-                        Err(e) => {
-                            metrics.packet_loss.inc_lost();
-                            tracing::warn!(error = ?e, "UDP recv error:");
-                            None
-                        }
-                    };
+            // Got a packet - reset the activity timer
+            activity.touch().map_err(std::io::Error::other)?;
 
-                    // Got a packet - reset the `flush` timer
-                    flush_timer.as_mut().reset(Instant::now() + flush_timeout);
-
-                    // If there was an error in `try_recv_from`, go back and
-                    // try to read another packet
-                    let Some(nbytes) = nbytes else { continue };
-
-                    Packet::parse(buf.get(..nbytes).unwrap_or_default())
-                        // push to state if parse was successful
-                        .and_then(|packet| buffers.push(packet))
-                        .map_or_else(
-                            // push failed - log it and move on
-                            |e| {
-                                metrics.packet_loss.inc_lost();
-                                tracing::warn!(error = ?e, "error handling received packet:");
-                            },
-                            |_| metrics.packet_loss.inc_recv(),
-                        );
-
-                }
-            }
-
-            () = &mut flush_timer => {
-                // Flush any pending data to the state buffer and reset the timer
-                let nsamp = buffers.flush();
-                // Reset the timer so we don't sit in this busy loop
-                flush_timer.as_mut().reset(Instant::now() + flush_timeout);
-
-                if nsamp > 0 {
-                    tracing::info!(
-                        "No packets received for {DATA_STATE_FLUSH_TIMEOUT_SECONDS}s - \
-                        flushed {nsamp} pending samples to state buffers"
-                    );
-                }
-
-                // log the next time we start receiving packets
-                log_packet_recv =  true;
-            }
+            Packet::parse(buf.get(..nbytes).unwrap_or_default())
+                // push to state if parse was successful
+                .and_then(|packet| buffers.push(packet))
+                .map_or_else(
+                    // push failed - log it and move on
+                    |e| {
+                        metrics.packet_loss.inc_lost();
+                        tracing::warn!(error = ?e, "error handling received packet:");
+                    },
+                    |_| metrics.packet_loss.inc_recv(),
+                );
         }
     }
 }

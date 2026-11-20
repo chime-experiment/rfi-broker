@@ -152,11 +152,13 @@ pub struct Buffer<T, const N: usize> {
     /// Store partial frames
     slots: Box<[Mutex<Slot<T>>]>,
     id_stride: usize,
-    // partial_frames: Mutex<BTreeMap<u64, Frame<T>>>,
     /// Holds the most recent frame for quick access
     last_frame: OnceLock<RwLock<SharedFrame<T>>>,
     /// broadcast sender for new frame events
     tx: broadcast::Sender<SharedFrame<T>>,
+    /// Hold a lock while sending and updating the
+    /// last sent frame
+    send_lock: Mutex<()>,
 }
 
 impl<T, const N: usize> Buffer<T, N>
@@ -177,6 +179,7 @@ where
             id_stride,
             last_frame: OnceLock::<RwLock<SharedFrame<T>>>::default(),
             tx,
+            send_lock: Mutex::new(()),
         }
     }
 
@@ -209,6 +212,10 @@ where
         }
 
         let shared_frame = Arc::new(frame);
+
+        // hold the send lock while updating and sending
+        let _guard = self.send_lock.lock();
+
         // NB: there's a double write for the first frame received
         *self
             .last_frame
@@ -303,12 +310,15 @@ where
                 // `id` should be monotonically increasing, so drop the sample
                 // if it's too old
                 Some(id) if key < id => {
-                    bail!("tried to push data with id {key} older than the slot's current id {id}")
+                    bail!(
+                        "tried to push data with id {key} older than the slot's \
+                        current id {id} (index={slot_index})"
+                    )
                 }
                 Some(id) if key == id => {
                     if slot.frame.is_none() {
                         // another thread got here first
-                        bail!("frame {key} was already completed!");
+                        bail!("frame with id {key} was already completed!");
                     }
                 }
                 _ => {

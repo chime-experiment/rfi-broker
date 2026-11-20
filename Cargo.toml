@@ -1,6 +1,6 @@
 [package]
 name = "rfi-broker"
-version = "1.4.2"
+version = "1.5.0"
 edition = "2024"
 
 [dependencies]
@@ -29,7 +29,6 @@ tracing-journald = "0.3.2"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [dev-dependencies]
-tracing-test = "0.2.6"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "parking_lot", "macros"] }
 ndarray = { version = "0.17.2", features = ["approx"] }
 approx = "0.5"

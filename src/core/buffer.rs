@@ -3,6 +3,8 @@
 //! The shape and dimensions are fixed at construction time; frames with
 //! a mismatched shape are dropped on push.
 
+use std::cmp::Ordering;
+
 use parking_lot::{Mutex, RwLock};
 use std::sync::{Arc, OnceLock};
 
@@ -22,24 +24,6 @@ use num_traits::Num;
 /// samples and get moved into the buffer
 const PARTIAL_FRAME_BUFFER_CAPACITY: usize = 64;
 const MIN_FRAME_SAMPLE_COUNT: u64 = 1;
-
-/// Buffer slot containing a partial [`Frame`]
-#[derive(Debug)]
-struct Slot<T> {
-    /// Current sequency ID occupying this slot
-    id: Option<u64>,
-    /// Current [`Frame`] in this slow
-    frame: Option<Frame<T>>, //
-}
-
-impl<T> Slot<T> {
-    const fn empty() -> Self {
-        Self {
-            id: None,
-            frame: None,
-        }
-    }
-}
 
 /// Single [`Buffer`] frame.
 ///
@@ -135,6 +119,24 @@ where
 
 pub type SharedFrame<T> = Arc<Frame<T>>;
 
+/// Buffer slot containing a partial [`Frame`]
+#[derive(Debug)]
+struct Slot<T> {
+    /// Current sequency ID occupying this slot
+    id: Option<u64>,
+    /// Current [`Frame`] in this slow
+    frame: Option<Frame<T>>, //
+}
+
+impl<T> Slot<T> {
+    const fn empty() -> Self {
+        Self {
+            id: None,
+            frame: None,
+        }
+    }
+}
+
 /// Buffer of decoded partial frames, shared across tasks.
 ///
 /// Once a [`Frame`] is complete, it gets pushed to all subscribers,
@@ -151,7 +153,10 @@ pub struct Buffer<T, const N: usize> {
     frame_shape: Vec<usize>,
     /// Store partial frames
     slots: Box<[Mutex<Slot<T>>]>,
-    id_stride: usize,
+    /// The number of frame `id`s which this slot can hold.
+    /// Relevant when the difference between `id`s > 1
+    slot_width: usize,
+    first_id: OnceLock<usize>,
     /// Holds the most recent frame for quick access
     last_frame: OnceLock<RwLock<SharedFrame<T>>>,
     /// broadcast sender for new frame events
@@ -166,7 +171,7 @@ where
     T: Num + Clone,
 {
     /// Create a new buffer with a fixed shape.
-    pub fn new(frame_shape: Vec<usize>, id_stride: usize) -> Self {
+    pub fn new(frame_shape: Vec<usize>, slot_width: usize) -> Self {
         let (tx, _) = broadcast::channel(N);
 
         let slots: Box<[Mutex<Slot<T>>]> = (0..PARTIAL_FRAME_BUFFER_CAPACITY)
@@ -176,7 +181,8 @@ where
         Self {
             frame_shape,
             slots,
-            id_stride,
+            slot_width,
+            first_id: OnceLock::<usize>::new(),
             last_frame: OnceLock::<RwLock<SharedFrame<T>>>::default(),
             tx,
             send_lock: Mutex::new(()),
@@ -295,7 +301,18 @@ where
             clippy::cast_possible_truncation,
             reason = "integer values too small for truncation"
         )]
-        let slot_index = (key as usize / self.id_stride) % PARTIAL_FRAME_BUFFER_CAPACITY;
+        let (incremental_index, first_key) = {
+            let first_key = self.first_id.get_or_init(|| {
+                tracing::info!(
+                    first_sequence_id = ?key,
+                    "received first sample with sequence ID {key}"
+                );
+                key as usize
+            });
+            (((key as usize - first_key) / self.slot_width), first_key)
+        };
+        // wrap based on the length of the buffer
+        let slot_index = incremental_index % PARTIAL_FRAME_BUFFER_CAPACITY;
 
         let mut evicted: Option<Frame<T>> = None;
 
@@ -306,19 +323,31 @@ where
                 .ok_or_eyre("unexpected failure accessing slow {slot_index}")?
                 .lock();
 
-            match slot.id {
+            #[allow(
+                clippy::integer_division,
+                clippy::cast_possible_truncation,
+                reason = "desired behaviour"
+            )]
+            // get the incremental slot index of the current slot `id`
+            let slot_id_compare = slot
+                .id
+                .map(|id| incremental_index.cmp(&((id as usize - first_key) / self.slot_width)));
+
+            match slot_id_compare {
+                #[allow(
+                    clippy::unwrap_used,
+                    reason = "unwrap guaranteed to succeed in this arm"
+                )]
                 // `id` should be monotonically increasing, so drop the sample
                 // if it's too old
-                Some(id) if key < id => {
-                    bail!(
-                        "tried to push data with id {key} older than the slot's \
-                        current id {id} (index={slot_index})"
-                    )
-                }
-                Some(id) if key == id => {
+                Some(Ordering::Less) => bail!(
+                    "tried to push data with id {key} older than the slot's current id \
+                    group {} (first_id={first_key}) (index={slot_index})",
+                    slot.id.unwrap()
+                ),
+                Some(Ordering::Equal) => {
                     if slot.frame.is_none() {
-                        // another thread got here first
-                        bail!("frame with id {key} was already completed!");
+                        bail!("frame with id group {key} was already completed!");
                     }
                 }
                 _ => {

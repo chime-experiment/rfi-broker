@@ -20,7 +20,7 @@ use num_traits::Num;
 
 /// Constants managing how/when a partial frame should stop accumulating
 /// samples and get moved into the buffer
-const PARTIAL_FRAME_BUFFER_CAPACITY: usize = 128;
+const PARTIAL_FRAME_BUFFER_CAPACITY: usize = 64;
 const MIN_FRAME_SAMPLE_COUNT: u64 = 1;
 
 /// Buffer slot containing a partial [`Frame`]
@@ -229,11 +229,29 @@ where
     /// Push all partial frames to subscribers.
     pub fn flush(&self) -> usize {
         let mut num_sent: usize = 0;
+        let mut last_id: u64 = 0;
+        let mut start_id: usize = 0;
 
-        for slot in &self.slots {
-            let taken = slot.lock().frame.take();
+        // find the earliest sequence id
+        for (i, slot) in self.slots.iter().enumerate() {
+            if let Some(id) = slot.lock().id {
+                if id < last_id {
+                    start_id = i;
+                } else {
+                    last_id = id;
+                }
+            }
+        }
 
-            if let Some(f) = taken {
+        // run through all of the slots, starting at `start_id`
+        for slot in self
+            .slots
+            .iter()
+            .cycle()
+            .skip(start_id)
+            .take(self.slots.len())
+        {
+            if let Some(f) = slot.lock().frame.take() {
                 self.send_frame(f);
                 num_sent += 1;
             }
@@ -260,6 +278,10 @@ where
         indices: &[usize],
         axis: usize,
     ) -> eyre::Result<u64> {
+        // NB: there's some complicated slot indexing here, because we need
+        // to assume that `sequence_id` can have a step greater than one. So,
+        // we need to map the `sequence_id` into a bin corresponding to a
+        // a specific buffer slot
         let key: u64 = sequence_id.into();
         #[allow(
             clippy::integer_division,

@@ -1,6 +1,12 @@
 //! Program tracing settings.
 
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{
+    EnvFilter, field::MakeExt, fmt::format::debug_fn, layer::SubscriberExt, util::SubscriberInitExt,
+};
+
+// assume that error messages will be included in the
+// main logging text
+const JOURNALD_ONLY_FIELDS: &[&str] = &["error"];
 
 /// Check if process is controlled by systemd
 fn is_controlled_by_systemd() -> bool {
@@ -22,7 +28,21 @@ pub fn init_tracing() {
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_thread_ids(true)
         .with_line_number(true)
-        .pretty();
+        .pretty()
+        .fmt_fields(
+            // don't duplicate certain fields when writing to stdout
+            debug_fn(|writer, field, value| {
+                let name = field.name();
+                if JOURNALD_ONLY_FIELDS.contains(&name) {
+                    Ok(())
+                } else if name == "message" {
+                    write!(writer, "{value:?}")
+                } else {
+                    write!(writer, "{name}={value:?}")
+                }
+            })
+            .delimited(", "),
+        );
 
     // Set the formatting layer depending on where we're writing logs
     if is_controlled_by_systemd() {

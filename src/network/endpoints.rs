@@ -50,10 +50,15 @@ pub async fn human_metrics(
 
     // Track packets received and rejected
     let rejected_samples: u64 = state.metrics.packet_loss.lost.get();
+    let skipped_samples: u64 = state.metrics.packet_loss.skipped.get();
     let total_samples: u64 = state.metrics.packet_loss.total.get();
     result.insert(
         "rejected_sample_count".into(),
         serde_json::to_value(rejected_samples).map_err(handler_err)?,
+    );
+    result.insert(
+        "skipped_sample_count".into(),
+        serde_json::to_value(skipped_samples).map_err(handler_err)?,
     );
     result.insert(
         "total_sample_count".into(),

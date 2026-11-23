@@ -76,6 +76,11 @@ impl Default for Metrics {
             packet_loss.lost.clone(),
         );
         registry.register(
+            "rfibroker_packets_skipped",
+            "Total packets skipped",
+            packet_loss.skipped.clone(),
+        );
+        registry.register(
             "rfibroker_rfi_zeroing_first_stage_enabled",
             "Whether or not the broker thinks the first stage excision is enabled",
             rfi_zeroing.first_stage.clone(),
@@ -122,8 +127,12 @@ impl Metrics {
 /// Tracker for a sample loss count/fraction.
 #[derive(Default)]
 pub struct SampleLossTracker {
+    /// Total packets received.
     pub total: Counter,
+    /// Packets lost/rejected due to errors.
     pub lost: Counter,
+    /// Packets rejected for known/valid reasons.
+    pub skipped: Counter,
 }
 
 impl SampleLossTracker {
@@ -139,6 +148,14 @@ impl SampleLossTracker {
         // Increment both counters
         self.inc_recv();
         self.lost.inc();
+    }
+
+    /// Record a skipped sample.
+    ///
+    /// Increments the total number of samples internally.
+    pub fn inc_skipped(&self) {
+        self.inc_recv();
+        self.skipped.inc();
     }
 }
 
@@ -322,6 +339,46 @@ mod tests {
         assert!(
             (frac - 0.2).abs() < 1.0e-6,
             "`frac_lost`={frac} is not within tolerance `1.0e-6` of expectation=`0.2`"
+        );
+    }
+
+    #[test]
+    /// Test that the [`SampleLossTracker`] produces the expected result.
+    fn test_sample_skipped_and_lost() {
+        let tracker = SampleLossTracker::default();
+
+        for _ in 0..8 {
+            tracker.inc_recv();
+        }
+
+        for _ in 0..2 {
+            tracker.inc_lost();
+        }
+
+        for _ in 0..4 {
+            tracker.inc_skipped();
+        }
+
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "values are too small for precision loss"
+        )]
+        let (frac_lost, frac_skipped) = {
+            (
+                tracker.lost.get() as f64 / tracker.total.get() as f64,
+                tracker.skipped.get() as f64 / tracker.total.get() as f64,
+            )
+        };
+
+        // Check that the fraction is lost is as expected,
+        // within a tolerance
+        assert!(
+            (frac_lost - (2.0 / 14.0)).abs() < 1.0e-6,
+            "`frac_lost`={frac_lost} is not within tolerance!"
+        );
+        assert!(
+            (frac_skipped - (4.0 / 14.0)).abs() < 1.0e-6,
+            "`frac_skipped`={frac_skipped} is not within tolerance!"
         );
     }
 

@@ -146,10 +146,11 @@ pub async fn packet_handler_task(
                 .map_or_else(
                     // push failed - log it and move on
                     |e| {
-                        metrics.packet_loss.inc_lost();
                         if let Some(buf_err) = e.downcast_ref::<BufferError>() {
+                            metrics.packet_loss.inc_skipped();
                             tracing::debug!("{:?}", buf_err.to_string());
                         } else {
+                            metrics.packet_loss.inc_lost();
                             tracing::warn!(error = ?e, "error handling a packet: {e}");
                         }
                     },

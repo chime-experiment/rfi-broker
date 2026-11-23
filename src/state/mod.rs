@@ -7,6 +7,7 @@
 
 mod buffers;
 pub mod config;
+mod metric_types;
 mod metrics;
 
 pub use buffers::Buffers;

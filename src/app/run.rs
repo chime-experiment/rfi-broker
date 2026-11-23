@@ -53,6 +53,10 @@ pub async fn run(
     // Spawn multiple listeners
     let mut rx_tasks: JoinSet<(usize, Result<(), std::io::Error>)> = JoinSet::new();
 
+    eyre::ensure!(
+        receiver_threads > 0,
+        "at least one packet receiver is required"
+    );
     for i in 0..receiver_threads {
         let sock = Arc::clone(&udp_sock);
         let buffers = Arc::clone(&state.buffers);

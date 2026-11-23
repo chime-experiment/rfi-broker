@@ -16,6 +16,7 @@ use {
 };
 
 use eyre::{OptionExt, WrapErr, bail, eyre};
+use thiserror::Error;
 
 use ndarray::{ArrayD, ArrayViewD, Axis, IxDyn};
 use num_traits::Num;
@@ -119,21 +120,29 @@ where
 
 pub type SharedFrame<T> = Arc<Frame<T>>;
 
+/// Basic buffer errors.
+#[derive(Debug, Error)]
+pub enum BufferError {
+    #[error("{msg} (value {value})")]
+    LateSample { msg: String, value: u64 },
+}
+
 /// Buffer slot containing a partial [`Frame`]
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct Slot<T> {
     /// Current sequency ID occupying this slot
     id: Option<u64>,
-    /// Current [`Frame`] in this slow
+    /// Current [`Frame`] in this slot
     frame: Option<Frame<T>>, //
 }
 
 impl<T> Slot<T> {
-    const fn empty() -> Self {
-        Self {
-            id: None,
-            frame: None,
-        }
+    const fn take(&mut self) -> (Option<u64>, Option<Frame<T>>) {
+        (self.id.take(), self.frame.take())
+    }
+
+    const fn replace(&mut self, id: u64, frame: Frame<T>) -> (Option<u64>, Option<Frame<T>>) {
+        (self.id.replace(id), self.frame.replace(frame))
     }
 }
 
@@ -168,14 +177,14 @@ pub struct Buffer<T, const N: usize> {
 
 impl<T, const N: usize> Buffer<T, N>
 where
-    T: Num + Clone,
+    T: Num + Clone + Default,
 {
     /// Create a new buffer with a fixed shape.
     pub fn new(frame_shape: Vec<usize>, slot_width: usize) -> Self {
         let (tx, _) = broadcast::channel(N);
 
         let slots: Box<[Mutex<Slot<T>>]> = (0..PARTIAL_FRAME_BUFFER_CAPACITY)
-            .map(|_| Mutex::new(Slot::empty()))
+            .map(|_| Mutex::new(Slot::default()))
             .collect();
 
         Self {
@@ -220,6 +229,12 @@ where
         let shared_frame = Arc::new(frame);
 
         // hold the send lock while updating and sending
+        // NB: this guarantees that the most recently sent frame is also
+        // the one stored in `self.last_frame`, but it doesn't require
+        // that frames are sent in sequence ID order. This should only
+        // be relevant when there are multiple threads pushing to the same
+        // buffer, and isn't critical for this application, but should be
+        // fixed at some point
         let _guard = self.send_lock.lock();
 
         // NB: there's a double write for the first frame received
@@ -242,32 +257,21 @@ where
     /// Push all partial frames to subscribers.
     pub fn flush(&self) -> usize {
         let mut num_sent: usize = 0;
-        let mut last_id: u64 = 0;
-        let mut start_id: usize = 0;
 
-        // find the earliest sequence id
-        for (i, slot) in self.slots.iter().enumerate() {
-            if let Some(id) = slot.lock().id {
-                if id < last_id {
-                    start_id = i;
-                } else {
-                    last_id = id;
-                }
-            }
-        }
-
-        // run through all of the slots, starting at `start_id`
-        for slot in self
+        let mut frames: Vec<Frame<T>> = self
             .slots
             .iter()
-            .cycle()
-            .skip(start_id)
-            .take(self.slots.len())
-        {
-            if let Some(f) = slot.lock().frame.take() {
-                self.send_frame(f);
-                num_sent += 1;
-            }
+            .filter_map(|slot| {
+                let (_, frame) = slot.lock().take();
+                frame
+            })
+            .collect();
+
+        frames.sort_unstable_by_key(|frame| frame.sequence_id);
+
+        for frame in frames {
+            self.send_frame(frame);
+            num_sent += 1;
         }
 
         num_sent
@@ -296,12 +300,16 @@ where
         // we need to map the `sequence_id` into a bin corresponding to a
         // a specific buffer slot
         let key: u64 = sequence_id.into();
+
         #[allow(
             clippy::integer_division,
             clippy::cast_possible_truncation,
             reason = "integer values too small for truncation"
         )]
-        let (incremental_index, first_key) = {
+        // `sequential_index` tracks slot count starting at zero,
+        // without wrapping. It maps the position of this frame to
+        // an index in an infinite buffer for easier housekeeping.
+        let (sequential_index, first_key) = {
             let first_key = self.first_id.get_or_init(|| {
                 tracing::info!(
                     first_sequence_id = ?key,
@@ -309,18 +317,26 @@ where
                 );
                 key as usize
             });
-            (((key as usize - first_key) / self.slot_width), first_key)
-        };
-        // wrap based on the length of the buffer
-        let slot_index = incremental_index % PARTIAL_FRAME_BUFFER_CAPACITY;
+            let offset = (key as usize)
+                .checked_sub(*first_key)
+                .ok_or_eyre("sequence ID precedes the first ID")?;
 
+            ((offset / self.slot_width), first_key)
+        };
+        // wrap based on the length of the buffer to get the
+        // index into the actual ring
+        let slot_index = sequential_index % PARTIAL_FRAME_BUFFER_CAPACITY;
+
+        // if the ring is full, the oldest frame goes here
         let mut evicted: Option<Frame<T>> = None;
 
+        // Don't do anything with an error here until we've handled
+        // an evicted frame below
         let result: eyre::Result<Option<Frame<T>>> = (|| {
             let mut slot = self
                 .slots
                 .get(slot_index)
-                .ok_or_eyre("unexpected failure accessing slow {slot_index}")?
+                .ok_or_else(|| eyre!("unexpected failure accessing slot {slot_index}"))?
                 .lock();
 
             #[allow(
@@ -331,7 +347,7 @@ where
             // get the incremental slot index of the current slot `id`
             let slot_id_compare = slot
                 .id
-                .map(|id| incremental_index.cmp(&((id as usize - first_key) / self.slot_width)));
+                .map(|id| sequential_index.cmp(&((id as usize - first_key) / self.slot_width)));
 
             match slot_id_compare {
                 #[allow(
@@ -340,21 +356,29 @@ where
                 )]
                 // `id` should be monotonically increasing, so drop the sample
                 // if it's too old
-                Some(Ordering::Less) => bail!(
-                    "tried to push data with id {key} older than the slot's current id \
-                    group {} (first_id={first_key}) (index={slot_index})",
-                    slot.id.unwrap()
-                ),
+                Some(Ordering::Less) => bail!(BufferError::LateSample {
+                    msg: format!(
+                        "tried to push data with id {key} older than the slot's current id \
+                        group {} (first_id={first_key}) (index={slot_index})",
+                        slot.id.unwrap()
+                    ),
+                    value: key,
+                }),
                 Some(Ordering::Equal) => {
                     if slot.frame.is_none() {
-                        bail!("frame with id group {key} was already completed!");
+                        bail!(BufferError::LateSample {
+                            msg: "frame group was already completed!".into(),
+                            value: key
+                        });
                     }
                 }
+                // any other case - `slot.id` is `None`, meaning it has not been used yet,
+                // or `cmp` returned `Ordering::Greater`, meaning that this is a new frame
+                // which should overwrite the existing one in the slot
                 _ => {
                     // make a new frame and insert it
                     let new_frame = Frame::new(key, &self.frame_shape, axis)?;
-                    evicted = slot.frame.replace(new_frame);
-                    slot.id = Some(key);
+                    (_, evicted) = slot.replace(key, new_frame);
                 }
             }
 
@@ -365,7 +389,12 @@ where
 
             let ready = frame.insert_chunk(indices, &array.view())?;
 
-            Ok(if ready { slot.frame.take() } else { None })
+            if ready {
+                let (_, frame) = slot.take();
+                Ok(frame)
+            } else {
+                Ok(None)
+            }
         })();
 
         if let Some(old) = evicted {

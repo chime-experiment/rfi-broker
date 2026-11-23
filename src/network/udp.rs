@@ -12,6 +12,7 @@ use tokio::net::UdpSocket;
 use tokio::time::{Duration, Instant, sleep};
 
 use super::packet::Packet;
+use crate::core::buffer::BufferError;
 
 /// Size in MB for the UDP socket buffer
 const UDP_BUF_SIZE_MB: usize = 8;
@@ -146,7 +147,11 @@ pub async fn packet_handler_task(
                     // push failed - log it and move on
                     |e| {
                         metrics.packet_loss.inc_lost();
-                        tracing::warn!(error = ?e, "error handling received packet: {e}");
+                        if let Some(buf_err) = e.downcast_ref::<BufferError>() {
+                            tracing::debug!("{:?}", buf_err.to_string());
+                        } else {
+                            tracing::warn!(error = ?e, "error handling a packet: {e}");
+                        }
                     },
                     |_| metrics.packet_loss.inc_recv(),
                 );

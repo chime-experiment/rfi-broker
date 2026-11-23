@@ -40,7 +40,11 @@ impl Buffers {
         let header: Header = packet.header;
 
         // Construct and check the sample stride
-        let id_stride = (header.samples_per_data_set * header.frames_per_packet) as usize;
+        let id_stride = usize::try_from(
+            u64::from(header.samples_per_data_set) * u64::from(header.frames_per_packet),
+        )?;
+
+        eyre::ensure!(id_stride > 0, "packet sample stride must be positive!");
 
         // Check that the metadata is as-expected and initialize otherwise
         self.metadata

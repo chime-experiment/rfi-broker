@@ -179,6 +179,7 @@ where
     T: Num + Clone + Default,
 {
     /// Create a new buffer with a fixed shape.
+    #[must_use]
     pub fn new(frame_shape: Vec<usize>, slot_width: usize) -> Self {
         let (tx, _) = broadcast::channel(N);
 
@@ -508,6 +509,7 @@ where
 }
 
 #[cfg(any(debug_assertions, test))]
+#[must_use]
 /// Stack the frame masks, creating a new outermost axis.
 pub fn stack_buffer_mask<T>(buffer: &[SharedFrame<T>]) -> Option<Array2<u8>>
 where

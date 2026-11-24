@@ -6,7 +6,7 @@ use core::sync::atomic::{AtomicU32, AtomicU64};
 use prometheus_client::registry::Registry;
 
 use super::metric_types::{LazyGaugeFamily, RFIZeroingTracker, SampleLossTracker};
-use crate::core::stats;
+use rfi_broker::core::stats;
 
 /// Bad input likelihood lookback num samples
 const BAD_INPUT_LIKELIHOOD_LOOKBACK: u16 = 128;

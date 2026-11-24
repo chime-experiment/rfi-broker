@@ -20,6 +20,9 @@ use super::simd_stats;
 /// across the 0th axis according to Fisher's method. Under assumed conditions,
 /// the fisher sum has a chi-squared distribution, the CDF of which is returned
 /// as a likelihood metric.
+///
+/// # Panics
+/// Panics if the input array is not c-contiguous
 pub fn sk_fisher_chi2<T>(arr: &ArrayView2<T>, k: T) -> Array1<f64>
 where
     T: AsPrimitive<f64>,

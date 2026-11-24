@@ -1,9 +1,9 @@
 //! Axum endpoints and associated functions.
 #[cfg(debug_assertions)]
 use {
-    crate::core::buffer::{stack_buffer_array, stack_buffer_mask},
     ndarray::Axis,
     ndarray_npy::write_npy,
+    rfi_broker::core::buffer::{stack_buffer_array, stack_buffer_mask},
     serde::Deserialize,
     std::path::Path,
     tokio::time::Duration,

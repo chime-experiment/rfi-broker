@@ -12,7 +12,6 @@ use clap::Parser;
 use eyre::{WrapErr, eyre};
 
 mod app;
-mod core;
 mod network;
 mod state;
 mod tasks;

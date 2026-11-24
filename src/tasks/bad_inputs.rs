@@ -9,8 +9,8 @@ use ndarray::Ix2;
 
 use eyre::bail;
 
-use crate::core::stats::sk_fisher_chi2;
 use crate::state::{Buffers, Computed};
+use rfi_broker::core::stats::sk_fisher_chi2;
 
 /// Task to update the `bad_input_likelihood` metric every time a
 /// new frame is generated.

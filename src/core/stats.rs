@@ -126,7 +126,8 @@ fn masked_mean(arr: &ArrayD<u8>, mask: &Array2<u8>, axis: usize) -> ArrayD<f32> 
 }
 
 /// Compute the median of a slice.
-fn median(x: &[f64]) -> f64 {
+#[must_use]
+pub fn median(x: &[f64]) -> f64 {
     // need to copy because partial sort modifies in-place
     let mut v: Vec<f64> = Vec::with_capacity(x.len());
 

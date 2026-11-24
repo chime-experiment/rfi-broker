@@ -71,6 +71,7 @@ pub fn accumulate_ln_p(acc: &mut [f64], vals: &[f64], mu: f64, coeff: f64) {
 }
 
 /// SIMD sum of (x - mu)^2 over a slice.
+#[must_use]
 pub fn sum_sq_dev_simd(vals: &[f64], mu: f64) -> f64 {
     let m = f64x4::splat(mu);
 
@@ -97,6 +98,7 @@ pub fn sum_sq_dev_simd(vals: &[f64], mu: f64) -> f64 {
 /// # Note
 /// This isn't SIMD-vectorized at the moment becauase of branching.
 #[inline]
+#[must_use]
 pub fn gamma_lr_wh(k: f64, s: f64) -> f64 {
     let fallback = if s.is_finite() { 0.0 } else { 1.0 };
 

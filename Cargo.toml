@@ -34,6 +34,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "
 ndarray = { version = "0.17.2", features = ["approx"] }
 approx = "0.5"
 statrs = "0.19.1"
+criterion = "0.8.2"
+rfi-broker = { path = ".", features = ["bench-internals"] }
 
 [profile.release]
 opt-level = 3
@@ -44,6 +46,14 @@ lto = "fat"
 inherits = "release"
 lto = "thin"
 debug-assertions = true
+
+[features]
+bench-internals = []
+
+[[bench]]
+name = "stats"
+harness = false
+required-features = ["bench-internals"]
 
 [lints.clippy]
 # Enable all pedantic warnings

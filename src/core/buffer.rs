@@ -9,7 +9,7 @@ use parking_lot::{Mutex, RwLock};
 use std::sync::{Arc, OnceLock};
 
 use tokio::sync::broadcast;
-#[cfg(any(debug_assertions, test))]
+#[cfg(any(debug_assertions, test, feature = "bench-internals"))]
 use {
     ndarray::Array2,
     tokio::time::{Duration, sleep},
@@ -442,7 +442,7 @@ where
     }
 }
 
-#[cfg(any(debug_assertions, test))]
+#[cfg(any(debug_assertions, test, feature = "bench-internals"))]
 impl<T, const N: usize> Buffer<T, N>
 where
     T: Num + Clone,

@@ -8,12 +8,11 @@ use std::cmp::Ordering;
 use parking_lot::{Mutex, RwLock};
 use std::sync::{Arc, OnceLock};
 
+#[cfg(any(debug_assertions, test))]
+use ndarray::Array2;
 use tokio::sync::broadcast;
 #[cfg(any(debug_assertions, test, feature = "bench-internals"))]
-use {
-    ndarray::Array2,
-    tokio::time::{Duration, sleep},
-};
+use tokio::time::{Duration, sleep};
 
 use eyre::{OptionExt, WrapErr, bail, eyre};
 use thiserror::Error;

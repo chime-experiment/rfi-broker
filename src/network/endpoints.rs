@@ -1,7 +1,9 @@
 //! Axum endpoints and associated functions.
+
 #[cfg(debug_assertions)]
+use ndarray::Axis;
+#[cfg(feature = "debug-tools")]
 use {
-    ndarray::Axis,
     ndarray_npy::write_npy,
     rfi_broker::core::buffer::{stack_buffer_array, stack_buffer_mask},
     serde::Deserialize,
@@ -209,7 +211,7 @@ pub async fn last_frame(State(state): State<AppState>) -> Result<String, (Status
     Ok(out)
 }
 
-#[cfg(debug_assertions)]
+#[cfg(feature = "debug-tools")]
 /// Query arguments for `write_buffers`.
 #[derive(Deserialize)]
 pub struct DumpParams {
@@ -217,7 +219,7 @@ pub struct DumpParams {
     nsamples: usize,
 }
 
-#[cfg(debug_assertions)]
+#[cfg(feature = "debug-tools")]
 /// `POST /write-buffers` - dump buffers into a set of .npy files.
 pub async fn write_buffers(
     State(state): State<AppState>,

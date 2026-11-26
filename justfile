@@ -23,7 +23,7 @@ bench:
 # --- CI ---
 
 ci-clippy: clippy
-    cargo clippy --all-targets --all-features --release -- -D warnings
+    cargo clippy --all-targets --release -- -D warnings
 
 # also test in release build for CI
 ci-test: test

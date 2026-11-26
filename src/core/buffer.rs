@@ -23,7 +23,6 @@ use num_traits::Num;
 
 /// Constants managing how/when a partial frame should stop accumulating
 /// samples and get moved into the buffer
-const PARTIAL_FRAME_BUFFER_CAPACITY: usize = 64;
 const MIN_FRAME_SAMPLE_COUNT: u64 = 1;
 
 /// Single [`Buffer`] frame.
@@ -183,9 +182,7 @@ where
     pub fn new(frame_shape: Vec<usize>, slot_width: usize) -> Self {
         let (tx, _) = broadcast::channel(N);
 
-        let slots: Box<[Mutex<Slot<T>>]> = (0..PARTIAL_FRAME_BUFFER_CAPACITY)
-            .map(|_| Mutex::new(Slot::default()))
-            .collect();
+        let slots: Box<[Mutex<Slot<T>>]> = (0..N).map(|_| Mutex::new(Slot::default())).collect();
 
         Self {
             frame_shape,
@@ -325,7 +322,7 @@ where
         };
         // wrap based on the length of the buffer to get the
         // index into the actual ring
-        let slot_index = sequential_index % PARTIAL_FRAME_BUFFER_CAPACITY;
+        let slot_index = sequential_index % N;
 
         // if the ring is full, the oldest frame goes here
         let mut evicted: Option<Frame<T>> = None;

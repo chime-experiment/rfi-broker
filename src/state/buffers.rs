@@ -9,7 +9,7 @@ use crate::core::buffer::Buffer;
 use crate::network::packet::{Body, Header, Packet, packet_types};
 
 /// Broadcast channel depth for frame events
-const TX_BUFFER_CAPACITY: usize = 32;
+const BUFFER_CAPACITY: usize = 64;
 
 /// Store for application data buffers.
 ///
@@ -28,9 +28,9 @@ pub struct Buffers {
     pub metadata: OnceLock<Mutex<Header>>,
     /// Ringbuffers holding associated datasets from the
     /// packet body. Implements `Default`.
-    pub frac_flagged: OnceLock<Buffer<packet_types::FracFlaggedType, TX_BUFFER_CAPACITY>>,
-    pub sktilde_avg: OnceLock<Buffer<packet_types::SkType, TX_BUFFER_CAPACITY>>,
-    pub skbar_avg: OnceLock<Buffer<packet_types::SkType, TX_BUFFER_CAPACITY>>,
+    pub frac_flagged: OnceLock<Buffer<packet_types::FracFlaggedType, BUFFER_CAPACITY>>,
+    pub sktilde_avg: OnceLock<Buffer<packet_types::SkType, BUFFER_CAPACITY>>,
+    pub skbar_avg: OnceLock<Buffer<packet_types::SkType, BUFFER_CAPACITY>>,
 }
 
 impl Buffers {
@@ -60,7 +60,7 @@ impl Buffers {
         // Push to each ringbuffer, initializing if this is the first push
         self.frac_flagged
             .get_or_init(|| {
-                Buffer::<packet_types::FracFlaggedType, TX_BUFFER_CAPACITY>::new(
+                Buffer::<packet_types::FracFlaggedType, BUFFER_CAPACITY>::new(
                     vec![header.num_total_freq as usize],
                     id_stride,
                 )
@@ -69,7 +69,7 @@ impl Buffers {
 
         self.sktilde_avg
             .get_or_init(|| {
-                Buffer::<packet_types::SkType, TX_BUFFER_CAPACITY>::new(
+                Buffer::<packet_types::SkType, BUFFER_CAPACITY>::new(
                     vec![header.num_total_freq as usize],
                     id_stride,
                 )
@@ -78,7 +78,7 @@ impl Buffers {
 
         self.skbar_avg
             .get_or_init(|| {
-                Buffer::<packet_types::SkType, TX_BUFFER_CAPACITY>::new(
+                Buffer::<packet_types::SkType, BUFFER_CAPACITY>::new(
                     vec![header.num_total_freq as usize, header.num_elements as usize],
                     id_stride,
                 )

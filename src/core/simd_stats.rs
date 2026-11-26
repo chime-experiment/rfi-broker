@@ -1,9 +1,11 @@
 //! SIMD implementations for the [`crate::core::stats`] module.
+#![allow(dead_code, reason = "for reference")]
+
 use std::f64::consts::FRAC_1_SQRT_2;
 use wide::f64x4;
 
 /// Constants for a fast erfc estimation
-const P_FLOOR: f64 = 1.0e-50;
+const LN_P_FLOOR: f64 = -115.129_254_649_702_29; // ln(1e-50)
 const C: [f64; 10] = [
     0.170_872_77,
     -0.822_152_23,
@@ -17,28 +19,7 @@ const C: [f64; 10] = [
     -1.265_512_23,
 ];
 
-/// erfc(z) for z >= 0; fractional error ~1.2e-7 (Numerical Recipes form)
-#[inline]
-fn erfc_v(z: f64x4) -> f64x4 {
-    let one = f64x4::splat(1.0);
-    let t = one / z.mul_add(f64x4::splat(0.5), one);
-    let mut p = f64x4::splat(C[0]);
-
-    for &c in &C[1..] {
-        p = p.mul_add(t, f64x4::splat(c));
-    }
-
-    t * (p - z * z).exp()
-}
-
-/// Serial `erfc`
-#[inline]
-fn erfc_s(z: f64) -> f64 {
-    let t = 1.0 / 0.5f64.mul_add(z, 1.0);
-    let p = C.iter().fold(0.0f64, |acc, &c| acc.mul_add(t, c));
-
-    t * z.mul_add(-z, p).exp()
-}
+// ---- Operations ----
 
 /// Compute the Fisher metric of a statistic summed over rows.
 ///
@@ -54,23 +35,23 @@ pub fn accumulate_ln_p(acc: &mut [f64], vals: &[f64], mu: f64, coeff: f64) {
     // SF = 0.5 * erfc(z)
     // p = max(2.0 * SF, epsilon)
     let (m, cf) = (f64x4::splat(mu), f64x4::splat(coeff));
-    let floor = f64x4::splat(P_FLOOR);
 
     let (a_chunks, a_tail) = acc.as_chunks_mut::<4>();
     let (v_chunks, v_tail) = vals.as_chunks::<4>();
 
     for (a, v) in a_chunks.iter_mut().zip(v_chunks) {
         let z = (f64x4::from(*v) - m).abs() * cf;
-        let p = erfc_v(z).max(floor);
+        let lnp = ln_erfc_v(z);
         // Fisher sum log(p)
-        *a = (f64x4::from(*a) + p.ln()).to_array();
+        *a = (f64x4::from(*a) + lnp).to_array();
     }
     for (a, &v) in a_tail.iter_mut().zip(v_tail) {
-        *a += erfc_s((v - mu).abs() * coeff).max(P_FLOOR).ln();
+        *a += ln_erfc_s((v - mu).abs() * coeff);
     }
 }
 
 /// SIMD sum of (x - mu)^2 over a slice.
+#[must_use]
 pub fn sum_sq_dev_simd(vals: &[f64], mu: f64) -> f64 {
     let m = f64x4::splat(mu);
 
@@ -97,6 +78,7 @@ pub fn sum_sq_dev_simd(vals: &[f64], mu: f64) -> f64 {
 /// # Note
 /// This isn't SIMD-vectorized at the moment becauase of branching.
 #[inline]
+#[must_use]
 pub fn gamma_lr_wh(k: f64, s: f64) -> f64 {
     let fallback = if s.is_finite() { 0.0 } else { 1.0 };
 
@@ -120,6 +102,63 @@ pub fn gamma_lr_wh(k: f64, s: f64) -> f64 {
     }
 }
 
+// ---- Internals ----
+
+#[inline]
+fn erfc_v_internal(z: f64x4) -> (f64x4, f64x4) {
+    let one = f64x4::splat(1.0);
+    let t = one / z.mul_add(f64x4::splat(0.5), one);
+    let mut p = f64x4::splat(C[0]);
+
+    for &c in &C[1..] {
+        p = p.mul_add(t, f64x4::splat(c));
+    }
+
+    (t, p)
+}
+
+/// erfc(z) for z >= 0; fractional error ~1.2e-7 (Numerical Recipes form)
+#[inline]
+fn erfc_v(z: f64x4) -> f64x4 {
+    let (t, p) = erfc_v_internal(z);
+
+    t * (p - z * z).exp()
+}
+
+/// ln of ``erfc_z``
+#[inline]
+fn ln_erfc_v(z: f64x4) -> f64x4 {
+    let (t, p) = erfc_v_internal(z);
+    let r = t.ln() + z.mul_add(-z, p);
+
+    r.max(f64x4::splat(LN_P_FLOOR))
+}
+
+#[inline]
+fn erfc_s_internal(z: f64) -> (f64, f64) {
+    let t = 1.0 / 0.5f64.mul_add(z, 1.0);
+    let p = C.iter().fold(0.0f64, |acc, &c| acc.mul_add(t, c));
+
+    (t, p)
+}
+
+/// Serial `erfc`
+#[inline]
+fn erfc_s(z: f64) -> f64 {
+    let (t, p) = erfc_s_internal(z);
+
+    t * z.mul_add(-z, p).exp()
+}
+
+#[inline]
+fn ln_erfc_s(z: f64) -> f64 {
+    let (t, p) = erfc_s_internal(z);
+
+    let r = t.ln() + z.mul_add(-z, p);
+
+    r.max(LN_P_FLOOR)
+}
+
 #[cfg(test)]
 #[allow(
     clippy::cast_precision_loss,
@@ -131,7 +170,6 @@ mod tests {
     use super::*;
     use statrs::function::{erf, gamma};
 
-    const LN_FLOOR: f64 = -115.129_254_649_702_29; // ln(1e-50)
     // erfc approx has ~1.2e-7 fractional error; allow headroom for wide's ln/exp
     const LN_TOL: f64 = 1.0e-6;
 
@@ -273,7 +311,7 @@ mod tests {
 
         for (g, w) in got.iter().zip(&want) {
             assert!(*g <= 1e-6, "sum of ln p must be <= 0, got {g}");
-            assert!(*g >= LN_FLOOR.mul_add(f64::from(rows), -1e-6));
+            assert!(*g >= LN_P_FLOOR.mul_add(f64::from(rows), -1e-6));
             // errors add across rows
             assert_close(*g, *w, LN_TOL * f64::from(rows), 0.0, "multi-row");
         }
@@ -294,9 +332,9 @@ mod tests {
         let vals = [1.0e4, -1.0e4, 0.0, 0.0, 1.0e4];
         let mut acc = vec![0.0; 5];
         accumulate_ln_p(&mut acc, &vals, 0.0, 1.0);
-        assert_eq!(acc[0], LN_FLOOR);
-        assert_eq!(acc[1], LN_FLOOR);
-        assert_eq!(acc[4], LN_FLOOR);
+        assert_eq!(acc[0], LN_P_FLOOR);
+        assert_eq!(acc[1], LN_P_FLOOR);
+        assert_eq!(acc[4], LN_P_FLOOR);
     }
 
     // ---------- gamma_lr_wh ----------

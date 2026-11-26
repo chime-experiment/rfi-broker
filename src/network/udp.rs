@@ -12,7 +12,7 @@ use tokio::net::UdpSocket;
 use tokio::time::{Duration, Instant, sleep};
 
 use super::packet::Packet;
-use crate::core::buffer::BufferError;
+use rfi_broker::core::buffer::BufferError;
 
 /// Size in MB for the UDP socket buffer
 const UDP_BUF_SIZE_MB: usize = 8;

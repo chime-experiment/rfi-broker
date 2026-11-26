@@ -20,6 +20,9 @@ use super::simd_stats;
 /// across the 0th axis according to Fisher's method. Under assumed conditions,
 /// the fisher sum has a chi-squared distribution, the CDF of which is returned
 /// as a likelihood metric.
+///
+/// # Panics
+/// Panics if the input array is not c-contiguous
 pub fn sk_fisher_chi2<T>(arr: &ArrayView2<T>, k: T) -> Array1<f64>
 where
     T: AsPrimitive<f64>,
@@ -123,7 +126,8 @@ fn masked_mean(arr: &ArrayD<u8>, mask: &Array2<u8>, axis: usize) -> ArrayD<f32> 
 }
 
 /// Compute the median of a slice.
-fn median(x: &[f64]) -> f64 {
+#[must_use]
+pub fn median(x: &[f64]) -> f64 {
     // need to copy because partial sort modifies in-place
     let mut v: Vec<f64> = Vec::with_capacity(x.len());
 

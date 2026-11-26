@@ -8,12 +8,11 @@ use std::cmp::Ordering;
 use parking_lot::{Mutex, RwLock};
 use std::sync::{Arc, OnceLock};
 
+#[cfg(any(debug_assertions, test, feature = "debug-tools"))]
+use ndarray::Array2;
 use tokio::sync::broadcast;
-#[cfg(any(debug_assertions, test))]
-use {
-    ndarray::Array2,
-    tokio::time::{Duration, sleep},
-};
+#[cfg(any(debug_assertions, test, feature = "bench-internals"))]
+use tokio::time::{Duration, sleep};
 
 use eyre::{OptionExt, WrapErr, bail, eyre};
 use thiserror::Error;
@@ -179,6 +178,7 @@ where
     T: Num + Clone + Default,
 {
     /// Create a new buffer with a fixed shape.
+    #[must_use]
     pub fn new(frame_shape: Vec<usize>, slot_width: usize) -> Self {
         let (tx, _) = broadcast::channel(N);
 
@@ -441,7 +441,12 @@ where
     }
 }
 
-#[cfg(any(debug_assertions, test))]
+#[cfg(any(
+    debug_assertions,
+    test,
+    feature = "bench-internals",
+    feature = "debug-tools"
+))]
 impl<T, const N: usize> Buffer<T, N>
 where
     T: Num + Clone,
@@ -487,7 +492,7 @@ where
     }
 }
 
-#[cfg(any(debug_assertions, test))]
+#[cfg(any(debug_assertions, test, feature = "debug-tools"))]
 /// Return an `N+1` dimensional [`ArrayD`] stacked over an axis, or `None`
 /// if no frames available.
 ///
@@ -507,7 +512,8 @@ where
     ndarray::stack(ax, &views).ok()
 }
 
-#[cfg(any(debug_assertions, test))]
+#[cfg(any(debug_assertions, test, feature = "debug-tools"))]
+#[must_use]
 /// Stack the frame masks, creating a new outermost axis.
 pub fn stack_buffer_mask<T>(buffer: &[SharedFrame<T>]) -> Option<Array2<u8>>
 where

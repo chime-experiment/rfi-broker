@@ -1,11 +1,10 @@
 //! Router for HTTP endpoints.
 
-use axum::{Router, routing::get};
 #[cfg(debug_assertions)]
-use {
-    axum::middleware::{self, Next},
-    axum::routing::post,
-};
+use axum::middleware::{self, Next};
+#[cfg(feature = "debug-tools")]
+use axum::routing::post;
+use axum::{Router, routing::get};
 
 use super::endpoints;
 use crate::state::AppState;
@@ -48,9 +47,10 @@ pub fn make_router(state: AppState) -> Router {
         .route("/", get(endpoints::dump_bad_input_likelihood));
 
     #[cfg(debug_assertions)]
-    let router = router
-        .route("/last-frame", get(endpoints::last_frame))
-        .route("/write-buffers", post(endpoints::write_buffers));
+    let router = router.route("/last-frame", get(endpoints::last_frame));
+
+    #[cfg(feature = "debug-tools")]
+    let router = router.route("/write-buffers", post(endpoints::write_buffers));
 
     let router = router.with_state(state);
 

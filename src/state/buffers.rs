@@ -5,8 +5,8 @@ use std::sync::OnceLock;
 use eyre::OptionExt;
 use parking_lot::Mutex;
 
-use crate::core::buffer::Buffer;
 use crate::network::packet::{Body, Header, Packet, packet_types};
+use rfi_broker::core::buffer::Buffer;
 
 /// Broadcast channel depth for frame events
 const BUFFER_CAPACITY: usize = 64;

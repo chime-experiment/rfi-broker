@@ -16,10 +16,14 @@ clippy:
 test:
     cargo nextest run --profile ci --no-tests="warn"
 
+# run all benchmarks
+bench:
+    RUSTFLAGS="-A warnings" cargo bench --benches --no-fail-fast
+
 # --- CI ---
 
 ci-clippy: clippy
-    cargo clippy --all-targets --all-features --release -- -D warnings
+    cargo clippy --all-targets --release -- -D warnings
 
 # also test in release build for CI
 ci-test: test

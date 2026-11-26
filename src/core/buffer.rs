@@ -101,7 +101,12 @@ where
             };
 
             if *m_sl {
-                bail!("tried to insert an index which has already been written: {idx}");
+                bail!(
+                    "id {:?} tried to insert an index which has already been written: {idx} \
+                    ({} provided indices: {indices:?})",
+                    self.sequence_id,
+                    indices.len(),
+                );
             }
             // Insert to the array and update the mask
             self.array

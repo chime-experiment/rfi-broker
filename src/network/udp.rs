@@ -8,6 +8,8 @@ use std::sync::{
 use std::io::ErrorKind::WouldBlock;
 use std::net::SocketAddr;
 
+use eyre::WrapErr;
+
 use tokio::net::UdpSocket;
 use tokio::time::{Duration, Instant, sleep};
 
@@ -103,7 +105,7 @@ pub async fn packet_handler_task(
     activity: Arc<NetworkActivity>,
     buffers: Arc<crate::state::Buffers>,
     metrics: Arc<crate::state::Metrics>,
-) -> Result<(), std::io::Error> {
+) -> eyre::Result<()> {
     // Record the first received packet
     let mut log_packet_recv: bool = true;
     // Allocate a buffer large enough for any valid UDP packet
@@ -115,7 +117,7 @@ pub async fn packet_handler_task(
         // performant than having a permanent thread always listening, but the effect
         // is negligible for the amount of data that we're receiving. If we ever end up
         // wanting higher throughput, this should probably just become a fixed thread.
-        sock.readable().await?;
+        sock.readable().await.wrap_err("failed to read socket")?;
 
         if log_packet_recv {
             tracing::info!("started receiving packets");

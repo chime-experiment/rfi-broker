@@ -9,7 +9,7 @@ use crate::core::buffer::Buffer;
 use crate::network::packet::{Body, Header, Packet, packet_types};
 
 /// Broadcast channel depth for frame events
-const TX_BUFFER_CAPACITY: usize = 32;
+const BUFFER_CAPACITY: usize = 64;
 
 /// Store for application data buffers.
 ///
@@ -28,9 +28,9 @@ pub struct Buffers {
     pub metadata: OnceLock<Mutex<Header>>,
     /// Ringbuffers holding associated datasets from the
     /// packet body. Implements `Default`.
-    pub frac_flagged: OnceLock<Buffer<packet_types::FracFlaggedType, TX_BUFFER_CAPACITY>>,
-    pub sktilde_avg: OnceLock<Buffer<packet_types::SkType, TX_BUFFER_CAPACITY>>,
-    pub skbar_avg: OnceLock<Buffer<packet_types::SkType, TX_BUFFER_CAPACITY>>,
+    pub frac_flagged: OnceLock<Buffer<packet_types::FracFlaggedType, BUFFER_CAPACITY>>,
+    pub sktilde_avg: OnceLock<Buffer<packet_types::SkType, BUFFER_CAPACITY>>,
+    pub skbar_avg: OnceLock<Buffer<packet_types::SkType, BUFFER_CAPACITY>>,
 }
 
 impl Buffers {
@@ -38,6 +38,13 @@ impl Buffers {
     pub fn push(&self, packet: Packet) -> eyre::Result<u64> {
         let body: Body = packet.body;
         let header: Header = packet.header;
+
+        // Construct and check the sample stride
+        let id_stride = usize::try_from(
+            u64::from(header.samples_per_data_set) * u64::from(header.frames_per_packet),
+        )?;
+
+        eyre::ensure!(id_stride > 0, "packet sample stride must be positive!");
 
         // Check that the metadata is as-expected and initialize otherwise
         self.metadata
@@ -53,26 +60,28 @@ impl Buffers {
         // Push to each ringbuffer, initializing if this is the first push
         self.frac_flagged
             .get_or_init(|| {
-                Buffer::<packet_types::FracFlaggedType, TX_BUFFER_CAPACITY>::new(vec![
-                    header.num_total_freq as usize,
-                ])
+                Buffer::<packet_types::FracFlaggedType, BUFFER_CAPACITY>::new(
+                    vec![header.num_total_freq as usize],
+                    id_stride,
+                )
             })
             .push_vec(body.frac_flagged, id, &indices, axis)?;
 
         self.sktilde_avg
             .get_or_init(|| {
-                Buffer::<packet_types::SkType, TX_BUFFER_CAPACITY>::new(vec![
-                    header.num_total_freq as usize,
-                ])
+                Buffer::<packet_types::SkType, BUFFER_CAPACITY>::new(
+                    vec![header.num_total_freq as usize],
+                    id_stride,
+                )
             })
             .push_vec(body.sktilde_avg, id, &indices, axis)?;
 
         self.skbar_avg
             .get_or_init(|| {
-                Buffer::<packet_types::SkType, TX_BUFFER_CAPACITY>::new(vec![
-                    header.num_total_freq as usize,
-                    header.num_elements as usize,
-                ])
+                Buffer::<packet_types::SkType, BUFFER_CAPACITY>::new(
+                    vec![header.num_total_freq as usize, header.num_elements as usize],
+                    id_stride,
+                )
             })
             .push_vec(body.skbar_avg, id, &indices, axis)?;
 

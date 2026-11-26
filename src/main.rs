@@ -11,8 +11,6 @@ use std::path::PathBuf;
 use clap::Parser;
 use eyre::{WrapErr, eyre};
 
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
-
 mod app;
 mod core;
 mod network;
@@ -21,6 +19,8 @@ mod tasks;
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+const DEFAULT_NUM_RECEIVERS: usize = 1;
 
 /// Command-line parser
 #[derive(Parser)]
@@ -42,6 +42,10 @@ struct Cli {
     /// Number of worker threads
     #[arg(short, long, default_value_t = default_nthreads())]
     pub threads: usize,
+
+    /// Number of receiver threads
+    #[arg(short, long, default_value_t = DEFAULT_NUM_RECEIVERS)]
+    pub receivers: usize,
 }
 
 /// Returns the default number of work threads: the larger of
@@ -51,57 +55,6 @@ fn default_nthreads() -> usize {
     std::thread::available_parallelism().map_or(1, |n| n.get().max(4))
 }
 
-/// Check if process is controlled by systemd
-fn is_controlled_by_systemd() -> bool {
-    std::env::var("JOURNAL_STREAM").is_ok()
-        || std::env::var("INVOCATION_ID").is_ok()
-        || std::env::var("RFI_BROKER_JOURNALD_TRACING").is_ok_and(|v| v == "1")
-}
-
-/// Set up program logging.
-///
-/// Log formatting is adjusted depending on whether we are running
-/// controlled by systemd or not.
-fn init_tracing() {
-    // Default to `INFO` log level. Can be adjusted using RUST_LOG environment variable
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let registry = tracing_subscriber::registry().with(env_filter);
-
-    // set a human-readable format layer, which may or may not be used
-    let fmt_layer = tracing_subscriber::fmt::layer()
-        .with_thread_ids(true)
-        .with_line_number(true)
-        .pretty();
-
-    // Set the formatting layer depending on where we're writing logs
-    if is_controlled_by_systemd() {
-        match tracing_journald::layer() {
-            Ok(layer) => {
-                let layer = layer
-                    .with_priority_mappings(tracing_journald::PriorityMappings {
-                        // Map `INFO` -> Informational(6) instead of Notice(5) to prevent
-                        // it from being rendered in bold font in journald
-                        info: tracing_journald::Priority::Informational,
-                        ..tracing_journald::PriorityMappings::new()
-                    })
-                    .with_field_prefix(None);
-                registry.with(layer).init();
-            }
-            Err(e) => {
-                // fall back to basic stdout formatting
-                registry.with(fmt_layer).init();
-                tracing::warn!(
-                    error = ?e,
-                    "journald logging was requested, but failed to set up layer:"
-                );
-            }
-        }
-    } else {
-        // not system controlled - use stdout formatting
-        registry.with(fmt_layer).init();
-    }
-}
-
 /// Parses CLI, resolves config, and starts the server.
 fn main() -> eyre::Result<()> {
     rustls_graviola::default_provider()
@@ -109,7 +62,7 @@ fn main() -> eyre::Result<()> {
         .map_err(|_| eyre!("failed to install default `rustls` crypto provider"))?;
 
     // Set up logging
-    init_tracing();
+    app::init_tracing();
 
     // Extract command-line options
     let cli = Cli::parse();
@@ -133,7 +86,7 @@ fn main() -> eyre::Result<()> {
         .enable_all()
         .build()
         .wrap_err("failed to build async runtime")?
-        .block_on(app::run(cli.addr, cli.udp_addr, config))
+        .block_on(app::run(cli.addr, cli.udp_addr, config, cli.receivers))
         .wrap_err("server failed")?;
 
     Ok(())

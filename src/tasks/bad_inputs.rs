@@ -3,9 +3,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use eyre::WrapErr;
+use tokio::sync::broadcast::error::RecvError;
 
 use ndarray::Ix2;
+
+use eyre::bail;
 
 use crate::core::stats::sk_fisher_chi2;
 use crate::state::{Buffers, Computed};
@@ -24,17 +26,23 @@ pub async fn bad_input_task(buffers: Arc<Buffers>, computed: Arc<Computed>) -> e
 
     // Wait for new data frames to arrive and handle accordingly
     loop {
-        let frame = event_rx
-            .recv()
-            .await
-            .wrap_err("error receiving new frame event")?;
+        let frame = match event_rx.recv().await {
+            Ok(frame) => frame,
+            Err(RecvError::Lagged(skipped)) => {
+                tracing::debug!("receive buffer overflowed = {skipped} frames were missed");
+                continue;
+            }
+            Err(RecvError::Closed) => {
+                bail!("frame sender connection closed!");
+            }
+        };
 
         // Convert the dynamically-sized array into a 2D array, which should be
         // guaranteed to succeed
         let Some(arr) = frame.array
             .view()
             .into_dimensionality::<Ix2>()
-            .inspect_err(|err| tracing::error!(error = ?err, "failed to cast expected 2D array into 2 dimensions"))
+            .inspect_err(|err| tracing::error!(error = ?err, "failed to cast expected 2D array into 2 dimensions: {err}"))
             .ok()
         else {
             continue
@@ -43,12 +51,7 @@ pub async fn bad_input_task(buffers: Arc<Buffers>, computed: Arc<Computed>) -> e
         let k: u16 = frame.mask.iter().map(|&b| u16::from(b)).sum();
 
         // compute the likelihood that a given feed is bad
-        let Some(update_val) = sk_fisher_chi2::<f32>(&arr, f32::from(k))
-            .inspect_err(|err| tracing::error!(error = ?err, "failed to compute chi2"))
-            .ok()
-        else {
-            continue;
-        };
+        let update_val = sk_fisher_chi2::<f32>(&arr, f32::from(k));
 
         // Update the exponentially-weighted moving average
         if let Some(sl) = update_val.as_slice() {
@@ -56,7 +59,7 @@ pub async fn bad_input_task(buffers: Arc<Buffers>, computed: Arc<Computed>) -> e
                 .bad_input_likelihood
                 .update(sl)
                 .inspect_err(
-                    |err| tracing::warn!(error = ?err, "failed to update bad input metric"),
+                    |err| tracing::warn!(error = ?err, "failed to update bad input metric: {err}"),
                 )
                 .ok();
         } else {

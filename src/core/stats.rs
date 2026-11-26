@@ -8,9 +8,10 @@ use parking_lot::Mutex;
 
 use ndarray::{Array1, Array2, ArrayD, ArrayView2, Axis, Zip};
 use num_traits::AsPrimitive;
-use statrs::function::{erf, gamma};
 
-use eyre::{OptionExt, WrapErr, ensure};
+use eyre::ensure;
+
+use super::simd_stats;
 
 /// Computes the chi2 CDF of a fisher sum of p-values of gaussian-distributed
 /// spectral kurtosis data.
@@ -19,7 +20,7 @@ use eyre::{OptionExt, WrapErr, ensure};
 /// across the 0th axis according to Fisher's method. Under assumed conditions,
 /// the fisher sum has a chi-squared distribution, the CDF of which is returned
 /// as a likelihood metric.
-pub fn sk_fisher_chi2<T>(arr: &ArrayView2<T>, k: T) -> eyre::Result<Array1<f64>>
+pub fn sk_fisher_chi2<T>(arr: &ArrayView2<T>, k: T) -> Array1<f64>
 where
     T: AsPrimitive<f64>,
 {
@@ -31,70 +32,64 @@ where
         clippy::cast_precision_loss,
         reason = "value too small for precision loss"
     )]
-    let n = arr.ncols() as f64;
+    let (nc, n) = { (arr.ncols(), arr.ncols() as f64) };
+
+    if nc == 0 {
+        return Array1::<f64>::zeros(0);
+    }
+
+    // NB: this could in theory result in a full copy. For the purposes
+    // of this application, the input is already c-contiguous
+    let std_arr = arr.as_standard_layout();
+    #[allow(
+        clippy::unwrap_used,
+        reason = "call to `as_standard_layout` ensures that this will succeed"
+    )]
+    let datasl = std_arr.as_slice().unwrap();
 
     // single-pass over rows to compute p-values and fisher sum
-    let mut metric = arr
-        .rows()
-        .into_iter()
-        .try_fold(Array1::<f64>::zeros(arr.ncols()), |mut acc, row| {
-            // ensure that the row is c-contigous. If so, `rowc` is just a cow
-            // view of `row`, so no copy is made.
-            let rowc = row.as_standard_layout();
-            let sl = rowc
-                .as_slice()
-                .ok_or_eyre("row is malformed - expected c-contiguous slice")?;
+    let (mut metric, _, _) = datasl.chunks_exact(nc).fold(
+        (
+            vec![0.0f64; nc],
+            Vec::<f64>::with_capacity(nc),
+            Vec::<f64>::with_capacity(nc),
+        ),
+        |(mut acc, mut vals, mut scratch), row| {
+            vals.clear();
+            vals.extend(row.iter().map(|v| v.as_()));
 
-            // compute the median and standard deviation of this row
-            let mu: f64 = median(sl);
+            // median and stddev of this row
+            let mu: f64 = median_scratch(&vals, &mut scratch);
 
             let std_coeff: f64 = {
-                let sum_squared = rowc.fold(0.0, |acc, &val| {
-                    let d = val.as_() - mu;
-                    d.mul_add(d, acc)
-                });
+                let sum_squared = simd_stats::sum_sq_dev_simd(&vals, mu);
                 let std = (sum_squared / n).sqrt();
 
                 NORM_COEFF / std
             };
-            // variance is 0 - don't include this row
-            if std_coeff.is_infinite() || std_coeff.is_nan() {
-                return Ok(acc);
+
+            if std_coeff.is_finite() && std_coeff > 0.0 {
+                simd_stats::accumulate_ln_p(&mut acc, &vals, mu, std_coeff);
             }
 
-            // elementwise p = 2.0 * SF(|x - mu|, 0, std)
-            // fisher metric is -2.0 * sum over rows of ln(p), but defer the
-            // multiplication by -2.0 to the pass where we compute `gamma_lr`
-            Zip::from(&mut acc).and(&rowc).for_each(|a, &val| {
-                // p-score takes the absolute-value of the centred `val` and passes it
-                // to the SF of a normal distribution with standard deviation `std`.
-                // these two operation can be combined in a slightly simplified way:
-                // z = |x - mu| / (std * sqrt(2))
-                // SF = 0.5 * erfc(z)
-                // p = max(2.0 * SF, epsilon)
-                let z = (val.as_() - mu).abs() * std_coeff;
-                let p = erf::erfc(z).max(1.0e-50);
-                // Fisher sum log(p)
-                *a += p.ln();
-            });
-
-            Ok::<_, eyre::Report>(acc)
-        })
-        .wrap_err("failed to construct Fisher sum")?;
+            (acc, vals, scratch)
+        },
+    );
 
     // chi2 of the fisher metric
     // df = 2k, so a = df/2 = k
     let k: f64 = k.as_();
-    metric.mapv_inplace(|x: f64| {
+
+    for a in &mut metric {
         // `checked_gamma_lr` errors if `x` is either 0 or infinite, so
         // x <= 0 -> g = 0.0 and x == inf -> g = 1.0
         // Fisher sum is multiplied by -2.0, which isn't done earlier, but the
         // input to the lower gamma func is divided by 2.0 so just use
         // the negative of the input
-        gamma::checked_gamma_lr(k, -x).unwrap_or(if x.is_finite() { 0.0 } else { 1.0 })
-    });
+        *a = simd_stats::gamma_lr_wh(k, -*a);
+    }
 
-    Ok(metric)
+    Array1::<f64>::from(metric)
 }
 
 /// Compute a masked mean over the 0th axis of an [`ArrayD`].
@@ -128,12 +123,18 @@ fn masked_mean(arr: &ArrayD<u8>, mask: &Array2<u8>, axis: usize) -> ArrayD<f32> 
 }
 
 /// Compute the median of a slice.
-fn median<T>(x: &[T]) -> f64
-where
-    T: AsPrimitive<f64>,
-{
+fn median(x: &[f64]) -> f64 {
     // need to copy because partial sort modifies in-place
-    let mut v: Vec<f64> = x.iter().map(|k| k.as_()).collect();
+    let mut v: Vec<f64> = Vec::with_capacity(x.len());
+
+    median_scratch(x, &mut v)
+}
+
+/// Compute the median of a slice, using an external
+/// scratch buffer.
+fn median_scratch(x: &[f64], v: &mut Vec<f64>) -> f64 {
+    v.clear();
+    v.extend_from_slice(x);
 
     // handle special cases
     let len: usize = v.len();

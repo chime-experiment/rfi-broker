@@ -11,7 +11,7 @@ use tokio::{net::TcpListener, task::JoinSet, time::timeout};
 
 use crate::network::{
     router::make_router,
-    udp::{NetworkActivity, construct_sock, packet_handler_task, packet_monitor_task},
+    udp::{NetworkActivity, packet_handler_task, packet_monitor_task},
 };
 use crate::state::AppConfig;
 use crate::state::AppState;
@@ -38,7 +38,7 @@ pub async fn run(
     let mut errors: Vec<eyre::Report> = Vec::new();
 
     // spawn UDP receiver tasks
-    let mut rx_tasks = spawn_rx_tasks(udp_addr, receiver_threads, &state).await?;
+    let mut rx_tasks = spawn_rx_tasks(udp_addr, receiver_threads, &state);
     // spawn internal processing tasks
     let mut tasks = spawn_proc_tasks(config, &state);
     // spawn the HTTP server
@@ -119,14 +119,11 @@ pub async fn run(
 
 // ----- async Task groups -----
 
-async fn spawn_rx_tasks(
+fn spawn_rx_tasks(
     udp_addr: SocketAddr,
     receiver_threads: usize,
     state: &AppState,
-) -> eyre::Result<JoinSet<eyre::Result<()>>> {
-    // Construct the socket and start the packet handling task. If this becomes
-    // a bottleneck, it could be run in multiple threads
-    let udp_sock = Arc::new(construct_sock(udp_addr).await?);
+) -> JoinSet<eyre::Result<()>> {
     // Construct an activity monitor for the network receive tasks
     let monitor = Arc::new(NetworkActivity::new());
 
@@ -139,7 +136,7 @@ async fn spawn_rx_tasks(
 
     for _ in 0..receiver_threads.max(1) {
         rx_tasks.spawn(packet_handler_task(
-            Arc::clone(&udp_sock),
+            udp_addr,
             Arc::clone(&monitor),
             Arc::clone(&state.buffers),
             Arc::clone(&state.metrics),
@@ -152,7 +149,7 @@ async fn spawn_rx_tasks(
         Arc::clone(&monitor),
     ));
 
-    Ok(rx_tasks)
+    rx_tasks
 }
 
 fn spawn_proc_tasks(config: Option<AppConfig>, state: &AppState) -> JoinSet<eyre::Result<()>> {

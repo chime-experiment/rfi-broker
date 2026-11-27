@@ -155,6 +155,74 @@ pub async fn solar_event_task(
         )
     })?;
 
+    // set up the enable and disable closures
+    let do_disable = async |valid_at: i64| {
+        let payload = json!({(&zeroing.toggle_value): false, "valid_at_time_ns": valid_at});
+        // Send the second-stage event first
+        tracing::info!(
+            addr = ?second_stage_addr,
+            payload = ?payload,
+            "sending second-stage `disable` event..."
+        );
+        post_event(&client, &headers, &second_stage_addr, &payload)
+            .await
+            .inspect(|_| metrics.rfi_zeroing.set_second(false))
+            .inspect_err(
+                |err| tracing::warn!(error = ?err, "failed to disable second-stage zeroing: {err}"),
+            )
+            .ok();
+
+        tracing::info!(
+            addr = ?first_stage_addr,
+            payload = ?payload,
+            "sending first-stage `disable` event..."
+        );
+        post_event(&client, &headers, &first_stage_addr, &payload)
+            .await
+            .inspect(|_| metrics.rfi_zeroing.set_first(false))
+            .inspect_err(
+                |err| tracing::warn!(error = ?err, "failed to disable first-stage zeroing: {err}"),
+            )
+            .ok();
+    };
+
+    let do_enable = async |valid_at: i64| {
+        let payload = json!({(&zeroing.toggle_value): true, "valid_at_time_ns": valid_at});
+        // send the first-stage event first
+        tracing::debug!(
+            addr = ?first_stage_addr,
+            payload = ?payload,
+            "sending first-stage `enable` event..."
+        );
+        post_event(&client, &headers, &first_stage_addr, &payload)
+            .await
+            .inspect(|_| metrics.rfi_zeroing.set_first(true))
+            .inspect_err(
+                |err| tracing::warn!(error = ?err, "failed to enable first-stage zeroing: {err}"),
+            )
+            .ok();
+
+        tracing::debug!(
+            addr = ?second_stage_addr,
+            payload = ?payload,
+            "sending second-stage `enable` event..."
+        );
+        post_event(&client, &headers, &second_stage_addr, &payload)
+            .await
+            .inspect(|_| metrics.rfi_zeroing.set_second(true))
+            .inspect_err(
+                |err| tracing::warn!(error = ?err, "failed to enable second-stage zeroing: {err}"),
+            )
+            .ok();
+    };
+
+    // Send an `enable` trigger at startup
+    let startup_time = DateTime::<Utc>::from(SystemTime::now())
+        .timestamp_nanos_opt()
+        .ok_or_eyre("failed to get the system time!")?;
+
+    do_enable(startup_time).await;
+
     // One-time calculation of solar noon for the current day. This could be in the past
     let mut next_noon =
         solar_noon(coords, telescope.altitude, 0).ok_or_eyre("failed to compute solar noon.")?;
@@ -177,43 +245,13 @@ pub async fn solar_event_task(
             .timestamp_nanos_opt()
             .unwrap_or(0);
 
-        let disable_payload =
-            json!({(&zeroing.toggle_value): false, "valid_at_time_ns": event_start_ns});
-        let enable_payload =
-            json!({(&zeroing.toggle_value): true, "valid_at_time_ns": event_end_ns});
-
         // Sleep until the next zeroing disable event
         if let Some(t) = seconds_until(next_event_start.timestamp()) {
             tokio::time::sleep(t).await;
-            // Send the second-stage event first
-            tracing::debug!(
-                addr = ?second_stage_addr,
-                payload = ?disable_payload,
-                "sending second-stage `disable` event..."
-            );
-            post_event(&client, &headers, &second_stage_addr, &disable_payload)
-                .await
-                .inspect(|_| metrics.rfi_zeroing.set_second(false))
-                .inspect_err(
-                    |err| tracing::warn!(error = ?err, "failed to disable second-stage zeroing: {err}"),
-                )
-                .ok();
-
-            tracing::debug!(
-                addr = ?first_stage_addr,
-                payload = ?disable_payload,
-                "second first-stage `disable` event..."
-            );
-            post_event(&client, &headers, &first_stage_addr, &disable_payload)
-                .await
-                .inspect(|_| metrics.rfi_zeroing.set_first(false))
-                .inspect_err(
-                    |err| tracing::warn!(error = ?err, "failed to disable first-stage zeroing: {err}"),
-                )
-                .ok();
+            do_disable(event_start_ns).await;
         }
 
-        // Sleep until the next enable event. If the even has passed, we still want
+        // Sleep until the next enable event. If the event has passed, we still want
         // to make sure that zeroing is enabled outside of the transit window. The
         // `else` case here should only be accessible on the first pass of this loop.
         if let Some(t) = seconds_until(next_event_end.timestamp()) {
@@ -224,33 +262,7 @@ pub async fn solar_event_task(
                 that zeroing is enabled anyway."
             );
         }
-
-        // Send the first-stage event first
-        tracing::debug!(
-            addr = ?first_stage_addr,
-            payload = ?enable_payload,
-            "sending first-stage `enable` event..."
-        );
-        post_event(&client, &headers, &first_stage_addr, &enable_payload)
-            .await
-            .inspect(|_| metrics.rfi_zeroing.set_first(true))
-            .inspect_err(
-                |err| tracing::warn!(error = ?err, "failed to enable first-stage zeroing: {err}"),
-            )
-            .ok();
-
-        tracing::debug!(
-            addr = ?second_stage_addr,
-            payload = ?enable_payload,
-            "second second-stage `enable` event..."
-        );
-        post_event(&client, &headers, &second_stage_addr, &enable_payload)
-            .await
-            .inspect(|_| metrics.rfi_zeroing.set_second(true))
-            .inspect_err(
-                |err| tracing::warn!(error = ?err, "failed to enable second-stage zeroing: {err}"),
-            )
-            .ok();
+        do_enable(event_end_ns).await;
 
         // Get the next solar noon window
         next_noon =

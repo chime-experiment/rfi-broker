@@ -44,7 +44,12 @@ pub fn make_router(state: AppState) -> Router {
             "/bad_input_likelihood",
             get(endpoints::get_bad_input_likelihood),
         )
-        .route("/", get(endpoints::dump_bad_input_likelihood));
+        // required for compatibility
+        .route(
+            "/rfi_bad_input_mask",
+            get(endpoints::dump_bad_input_likelihood),
+        )
+        .route("/", get(endpoints::human_metrics));
 
     #[cfg(debug_assertions)]
     let router = router.route("/last-frame", get(endpoints::last_frame));

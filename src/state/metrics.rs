@@ -9,7 +9,7 @@ use super::metric_types::{LazyGaugeFamily, RFIZeroingTracker, SampleLossTracker}
 use rfi_broker::core::stats;
 
 /// Bad input likelihood lookback num samples
-const BAD_INPUT_LIKELIHOOD_LOOKBACK: u16 = 128;
+const BAD_INPUT_LIKELIHOOD_LOOKBACK: u16 = 384;
 
 /// Store for computed quantities.
 ///

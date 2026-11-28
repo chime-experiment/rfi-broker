@@ -321,7 +321,7 @@ where
             });
             let offset = (key as usize)
                 .checked_sub(*first_key)
-                .ok_or_eyre("sequence ID precedes the first ID")?;
+                .ok_or_else(|| eyre!("sequence ID {key} precedes the first ID {first_key}"))?;
 
             ((offset / self.slot_width), first_key)
         };

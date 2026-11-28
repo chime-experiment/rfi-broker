@@ -8,6 +8,9 @@ use std::sync::{
 use std::io::ErrorKind::WouldBlock;
 use std::net::SocketAddr;
 
+use eyre::WrapErr;
+
+use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::UdpSocket;
 use tokio::time::{Duration, Instant, sleep};
 
@@ -21,19 +24,21 @@ const UDP_BUF_SIZE_MB: usize = 8;
 const DATA_STATE_FLUSH_TIMEOUT_SECONDS: u64 = 5;
 
 /// Construct a UDP socket with a buffer large enough to handle burst events.
-pub async fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Error> {
-    let socket = UdpSocket::bind(addr).await?;
+fn construct_sock(addr: SocketAddr) -> std::io::Result<UdpSocket> {
+    let socket = Socket::new(Domain::for_address(addr), Type::DGRAM, Some(Protocol::UDP))?;
 
-    // Borrow the socket as a socket2 ref to increase buffer size
-    let sock_ref = socket2::SockRef::from(&socket);
-    sock_ref.set_recv_buffer_size(UDP_BUF_SIZE_MB * 1024 * 1024)?;
+    socket.set_reuse_port(true)?;
+    socket.set_recv_buffer_size(UDP_BUF_SIZE_MB * 1024 * 1024)?;
+    socket.set_nonblocking(true)?;
+
+    socket.bind(&addr.into())?;
 
     // log the actual recv buffer size
     #[allow(
         clippy::cast_precision_loss,
         reason = "buffer size should never be large enough to cause precision loss"
     )]
-    let actual = sock_ref.recv_buffer_size()? as f64 / 1024_f64 / 1024_f64;
+    let actual = socket.recv_buffer_size()? as f64 / 1024_f64 / 1024_f64;
 
     tracing::info!(
         udp_addr = ?addr,
@@ -42,7 +47,7 @@ pub async fn construct_sock(addr: SocketAddr) -> Result<UdpSocket, std::io::Erro
         "created UDP socket {addr}. Requested {UDP_BUF_SIZE_MB} MB, actual {actual} MB",
     );
 
-    Ok(socket)
+    UdpSocket::from_std(socket.into())
 }
 
 /// Tracks the duration since some sort of activity
@@ -99,11 +104,13 @@ pub async fn packet_monitor_task(
 ///
 /// Runs indefinitely - intended to be run with [`tokio::spawn`].
 pub async fn packet_handler_task(
-    sock: Arc<UdpSocket>,
+    addr: SocketAddr,
     activity: Arc<NetworkActivity>,
     buffers: Arc<crate::state::Buffers>,
     metrics: Arc<crate::state::Metrics>,
-) -> Result<(), std::io::Error> {
+) -> eyre::Result<()> {
+    // Make a socket for this receiver
+    let sock: UdpSocket = construct_sock(addr)?;
     // Record the first received packet
     let mut log_packet_recv: bool = true;
     // Allocate a buffer large enough for any valid UDP packet
@@ -115,7 +122,7 @@ pub async fn packet_handler_task(
         // performant than having a permanent thread always listening, but the effect
         // is negligible for the amount of data that we're receiving. If we ever end up
         // wanting higher throughput, this should probably just become a fixed thread.
-        sock.readable().await?;
+        sock.readable().await.wrap_err("failed to read socket")?;
 
         if log_packet_recv {
             tracing::info!("started receiving packets");

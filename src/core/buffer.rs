@@ -101,7 +101,12 @@ where
             };
 
             if *m_sl {
-                bail!("tried to insert an index which has already been written: {idx}");
+                bail!(
+                    "id {:?} tried to insert an index which has already been written: {idx} \
+                    ({} provided indices: {indices:?})",
+                    self.sequence_id,
+                    indices.len(),
+                );
             }
             // Insert to the array and update the mask
             self.array
@@ -316,7 +321,7 @@ where
             });
             let offset = (key as usize)
                 .checked_sub(*first_key)
-                .ok_or_eyre("sequence ID precedes the first ID")?;
+                .ok_or_else(|| eyre!("sequence ID {key} precedes the first ID {first_key}"))?;
 
             ((offset / self.slot_width), first_key)
         };

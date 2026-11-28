@@ -20,6 +20,7 @@ mod tasks;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 const DEFAULT_NUM_RECEIVERS: usize = 1;
+const DEFAULT_NUM_THREADS: usize = 6;
 
 /// Command-line parser
 #[derive(Parser)]
@@ -39,7 +40,7 @@ struct Cli {
     pub config: Option<PathBuf>,
 
     /// Number of worker threads
-    #[arg(short, long, default_value_t = default_nthreads())]
+    #[arg(short, long, default_value_t = DEFAULT_NUM_THREADS)]
     pub threads: usize,
 
     /// Number of receiver threads
@@ -48,10 +49,11 @@ struct Cli {
 }
 
 /// Returns the default number of work threads: the larger of
-/// the number of logical CPU cores and 4. Falls back to 1 if
+/// the number of logical CPU cores and 6. Falls back to 1 if
 /// the OS does not report available parallelism.
+#[allow(dead_code, reason = "for testing")]
 fn default_nthreads() -> usize {
-    std::thread::available_parallelism().map_or(1, |n| n.get().max(4))
+    std::thread::available_parallelism().map_or(1, |n| n.get().max(6))
 }
 
 /// Parses CLI, resolves config, and starts the server.
